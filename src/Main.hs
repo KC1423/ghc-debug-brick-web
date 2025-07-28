@@ -1230,27 +1230,25 @@ disabledMenuItem :: Widget n -> Widget n
 disabledMenuItem = forceAttr disabledMenuAttr
 
 main :: IO ()
-main = Scotty.scotty 3000 $ 
-  Scotty.get "/" $ do
-    {-eventChan <- newBChan 10
-    _ <- forkIO $ forever $ do
-      writeBChan eventChan PollTick
-      -- 2s
-      threadDelay 2_000_000
-    let buildVty = Vty.mkVty Vty.defaultConfig
-    initialVty <- buildVty
-    let app :: App AppState Event Name
-        app = App
-          { appDraw = myAppDraw
-          , appChooseCursor = showFirstCursor
-          , appHandleEvent = myAppHandleEvent
-          , appStartEvent = myAppStartEvent
-          , appAttrMap = myAppAttrMap
-          }
-    _finalState <- customMain initialVty buildVty
-                      (Just eventChan) app (initialAppState eventChan)
-    --beam <- Scotty.pathParam "debug"
-    --Scotty.html $ mconcat ["<h1> hello there", beam,", this is working </h1>"]
-    --return ()-}
-    --beam <- Scotty.pathParam "debug"
-    Scotty.html $ mconcat ["<h1> hello there debugger, this is working </h1>"]
+main = do
+  {-eventChan <- newBChan 10
+  _ <- forkIO $ forever $ do
+    writeBChan eventChan PollTick
+    -- 2s
+    threadDelay 2_000_000
+  let buildVty = Vty.mkVty Vty.defaultConfig
+  initialVty <- buildVty
+  let app :: App AppState Event Name
+      app = App
+        { appDraw = myAppDraw
+        , appChooseCursor = showFirstCursor
+        , appHandleEvent = myAppHandleEvent
+        , appStartEvent = myAppStartEvent
+        , appAttrMap = myAppAttrMap
+        }
+  _finalState <- customMain initialVty buildVty
+                    (Just eventChan) app (initialAppState eventChan)
+  -}
+  Scotty.scotty 3000 $ 
+    Scotty.get "/" $ do
+      Scotty.html $ mconcat ["<h1> hello there debugger, this is working </h1>"]
