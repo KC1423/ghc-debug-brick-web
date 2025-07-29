@@ -19,7 +19,7 @@ module Main where
 
 import qualified Web.Scotty as Scotty
 import Data.IORef
-import Data.Text (Text, pack)
+--import Data.Text (Text, pack)
 import qualified Data.Text.Lazy as TL
 import Lucid
 
@@ -1234,9 +1234,12 @@ myAppHandleEvent brickEvent = do
           return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
-renderSocketSelectionPage :: [SocketInfo] -> TL.Text
-renderSocketSelectionPage sockets = 
+renderSocketSelectionPage :: SetupKind -> [SocketInfo] -> TL.Text
+renderSocketSelectionPage st sockets = 
   renderText $ do
+    h1_ $ toHtml ("Mode: " <> show st)
+    form_ [method_ "post", action_ "/toggle-set-up"] $ do
+      button_ "Toggle mode"
     h1_ $ toHtml ("Select a debuggee to connect to (found " <> pack (show (length sockets)) <> "):")
     form_ [method_ "post", action_ "/connect"] $ do
       ul_ $ F.forM_ sockets $ \ socket ->
@@ -1244,6 +1247,9 @@ renderSocketSelectionPage sockets =
           input_ [type_ "radio", name_ "socket", value_ (socketName socket)]
           toHtml $ socketName socket
       button_ "Connect"
+
+renderSnapshotSelectionPage :: SetupKind -> [SocketInfo] -> TL.Text
+renderSnapshotSelectionPage = renderSocketSelectionPage
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1254,10 +1260,28 @@ app appStateRef = do
         knownDebuggees' <- liftIO $ updateListFrom socketDirectory knownDebuggees
         knownSnapshots' <- liftIO $ updateListFrom snapshotDirectory knownSnapshots
         let socketList = F.toList $ knownDebuggees' ^. listElementsL
+        let snapshotList = F.toList $ knownSnapshots' ^. listElementsL
         liftIO $ writeIORef appStateRef $ state & majorState .~ Setup st knownDebuggees' knownSnapshots'
-        Scotty.html $ renderSocketSelectionPage socketList
+        case st of 
+          Socket -> Scotty.html $ renderSocketSelectionPage st socketList
+          Snapshot -> Scotty.html $ renderSnapshotSelectionPage st snapshotList
       Connected {} -> do
         Scotty.text "you are connected!"
+        -- auto-redirect from here?
+  Scotty.post "/connect" $ do
+    socketPath <- Scotty.formParam "socket"
+    Scotty.html $ socketPath
+    --state <- liftIO $ readIORef appStateRef
+    --case state ^. majorState of
+    --  Setup st knownDebuggees knownSnapshots -> do
+  Scotty.post "/toggle-set-up" $ do
+    liftIO $ modifyIORef' appStateRef $ \ state -> 
+      state & majorState %~ \ st -> case st of 
+        Setup st' d s -> Setup (toggleSetup st') d s
+        other -> other
+    Scotty.redirect "/"
+         
+ 
 
 main :: IO ()
 main = newMain
@@ -1272,8 +1296,8 @@ oldMain = do
   let buildVty = Vty.mkVty Vty.defaultConfig
   initialVty <- buildVty
   
-  let app :: App AppState Event Name
-      app = App
+  let app' :: App AppState Event Name
+      app' = App
         { appDraw = myAppDraw
         , appChooseCursor = showFirstCursor
         , appHandleEvent = myAppHandleEvent
@@ -1281,7 +1305,7 @@ oldMain = do
         , appAttrMap = myAppAttrMap
         }
   _finalState <- customMain initialVty buildVty
-                    (Just eventChan) app (initialAppState eventChan)
+                    (Just eventChan) app' (initialAppState eventChan)
   return ()
 
 newMain :: IO ()

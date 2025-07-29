@@ -87,7 +87,7 @@ instance Ord SocketInfo where
 
 type SnapshotInfo = SocketInfo
 
-data SetupKind = Socket | Snapshot
+data SetupKind = Socket | Snapshot deriving (Eq, Show)
 
 toggleSetup :: SetupKind -> SetupKind
 toggleSetup Socket = Snapshot
