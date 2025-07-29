@@ -1234,6 +1234,9 @@ myAppHandleEvent brickEvent = do
           return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
+
+{- New code here -}
+
 renderSocketSelectionPage :: SetupKind -> [SocketInfo] -> TL.Text
 renderSocketSelectionPage st sockets = 
   renderText $ do
@@ -1258,8 +1261,13 @@ renderAlreadyConnectedPage =
     form_ [method_ "get", action_ "/connect"] $ do
       button_ "See debuggee"
 
-renderConnectedPage :: Debuggee -> TL.Text
-renderConnectedPage debuggee = renderText $ h1_ "define connected page here!"
+renderConnectedPage :: SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
+renderConnectedPage socket debuggee mode = renderText $ case mode of
+  RunningMode -> do
+    h2_ "Status: running mode. There is nothing you can do until you pause the process."
+    form_ [method_ "post", action_ "/pause"] $ 
+      button_ "Pause process" 
+  PausedMode os -> h1_ "you are in paused mode"
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1280,7 +1288,7 @@ app appStateRef = do
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected _ debuggee _ -> Scotty.html (renderConnectedPage debuggee)
+      Connected socket debuggee mode -> Scotty.html (renderConnectedPage socket debuggee mode)
       _ -> Scotty.redirect "/"
   Scotty.post "/connect" $ do
     socketPath <- Scotty.formParam "socket"
@@ -1307,17 +1315,50 @@ app appStateRef = do
                             _mode = RunningMode
                           }
                   liftIO $ writeIORef appStateRef newState
-                  Scotty.html $ renderConnectedPage debuggee
+                  Scotty.html $ renderConnectedPage socket debuggee RunningMode
                 else do
                   Scotty.html $ "Error: socket not found"
               Nothing -> Scotty.text "Selected socket not found"
+      Connected socket debuggee mode -> do
+        Scotty.html $ renderConnectedPage socket debuggee mode
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
       state & majorState %~ \ st -> case st of 
         Setup st' d s -> Setup (toggleSetup st') d s
         other -> other
     Scotty.redirect "/"
-         
+  Scotty.post "/pause" $ do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected socket debuggee RunningMode -> do
+        liftIO $ pause debuggee
+        ver <- liftIO $ GD.version debuggee
+        (rootsTree, initRoots) <- liftIO $ mkSavedAndGCRootsIOTree debuggee
+        let pausedState = PausedMode $
+                            OperationalState Nothing
+                              Nothing
+                              savedAndGCRoots
+                              NoOverlay
+                              FooterInfo
+                              (DefaultRoots initRoots)
+                              rootsTree
+                              (_appChan state)
+                              (Just 100)
+                              []
+                              ver 
+            newAppState = state & majorState . mode .~ pausedState
+        liftIO $ writeIORef appStateRef newAppState
+        Scotty.redirect "/connect"     
+      _ -> Scotty.redirect "/"
+  where mkSavedAndGCRootsIOTree debuggee' = do
+          raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
+          rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
+          raw_saved <- map ("Saved Object",) <$> GD.savedClosures debuggee'
+          savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
+          return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
+                   , fmap toPtr <$> (raw_roots ++ raw_saved))
+
+
  
 
 main :: IO ()
