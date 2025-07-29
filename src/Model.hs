@@ -15,6 +15,9 @@ module Model
   , module Common
   ) where
 
+import Network.Socket as NS
+import Control.Exception (try, SomeException)
+
 import Data.Maybe (fromMaybe)
 import Data.Sequence as Seq
 import Lens.Micro.Platform
@@ -74,6 +77,16 @@ socketName = pack . takeFileName . _socketLocation
 
 renderSocketTime :: SocketInfo -> Text
 renderSocketTime = pack . formatTime defaultTimeLocale "%c" . _socketCreated
+
+isSocketAlive :: FilePath -> IO Bool
+isSocketAlive path = do
+  result <- try $ do
+    socket <- NS.socket NS.AF_UNIX NS.Stream NS.defaultProtocol
+    NS.connect socket (NS.SockAddrUnix path)
+    NS.close socket
+  pure $ case result of
+    Left (_ :: SomeException) -> False
+    Right _ -> True
 
 data SocketInfo = SocketInfo
                     { _socketLocation :: FilePath -- ^ FilePath to socket, absolute path

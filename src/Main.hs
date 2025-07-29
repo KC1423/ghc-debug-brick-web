@@ -1251,6 +1251,16 @@ renderSocketSelectionPage st sockets =
 renderSnapshotSelectionPage :: SetupKind -> [SocketInfo] -> TL.Text
 renderSnapshotSelectionPage = renderSocketSelectionPage
 
+renderAlreadyConnectedPage :: TL.Text
+renderAlreadyConnectedPage =
+  renderText $ do
+    h1_ "You are already connected!"
+    form_ [method_ "get", action_ "/connect"] $ do
+      button_ "See debuggee"
+
+renderConnectedPage :: Debuggee -> TL.Text
+renderConnectedPage debuggee = renderText $ h1_ "define connected page here!"
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   Scotty.get "/" $ do
@@ -1266,14 +1276,41 @@ app appStateRef = do
           Socket -> Scotty.html $ renderSocketSelectionPage st socketList
           Snapshot -> Scotty.html $ renderSnapshotSelectionPage st snapshotList
       Connected {} -> do
-        Scotty.text "you are connected!"
-        -- auto-redirect from here?
+        Scotty.html $ renderAlreadyConnectedPage
+  Scotty.get "/connect" $ do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected _ debuggee _ -> Scotty.html (renderConnectedPage debuggee)
+      _ -> Scotty.redirect "/"
   Scotty.post "/connect" $ do
     socketPath <- Scotty.formParam "socket"
     Scotty.html $ socketPath
-    --state <- liftIO $ readIORef appStateRef
-    --case state ^. majorState of
-    --  Setup st knownDebuggees knownSnapshots -> do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Setup st knownDebuggees knownSnapshots -> do
+        case st of
+          Snapshot -> Scotty.text "snapshot selected: please define me!"
+          Socket -> do
+            let socketList = F.toList (knownDebuggees ^. listElementsL)
+                msocket = F.find (\s -> TL.fromStrict (socketName s) == socketPath) socketList
+            case msocket of
+              Just socket -> do
+                liftIO $ putStrLn ("trying to connect to socket: " ++ show (socketName socket))
+                alive <- liftIO $ isSocketAlive (_socketLocation socket)
+                if alive then do
+                  debuggee <- liftIO $ 
+                    debuggeeConnect (writeBChan (_appChan state) . ProgressMessage)
+                                    (_socketLocation socket)
+                  let newState = state & majorState .~ Connected
+                          { _debuggeeSocket = socket,
+                            _debuggee = debuggee,
+                            _mode = RunningMode
+                          }
+                  liftIO $ writeIORef appStateRef newState
+                  Scotty.html $ renderConnectedPage debuggee
+                else do
+                  Scotty.html $ "Error: socket not found"
+              Nothing -> Scotty.text "Selected socket not found"
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
       state & majorState %~ \ st -> case st of 
