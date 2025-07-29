@@ -1267,10 +1267,12 @@ renderConnectedPage socket debuggee mode = renderText $ case mode of
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
       button_ "Pause process" 
-  PausedMode os -> h1_ "you are in paused mode"
+  PausedMode os -> do
+    h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
+  {- Main page where sockets/snapshots can be selected for debugging -}
   Scotty.get "/" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
@@ -1285,11 +1287,13 @@ app appStateRef = do
           Snapshot -> Scotty.html $ renderSnapshotSelectionPage st snapshotList
       Connected {} -> do
         Scotty.html $ renderAlreadyConnectedPage
+  {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected socket debuggee mode -> Scotty.html (renderConnectedPage socket debuggee mode)
       _ -> Scotty.redirect "/"
+  {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
     socketPath <- Scotty.formParam "socket"
     Scotty.html $ socketPath
@@ -1303,7 +1307,7 @@ app appStateRef = do
                 msocket = F.find (\s -> TL.fromStrict (socketName s) == socketPath) socketList
             case msocket of
               Just socket -> do
-                liftIO $ putStrLn ("trying to connect to socket: " ++ show (socketName socket))
+                --liftIO $ putStrLn ("trying to connect to socket: " ++ show (socketName socket))
                 alive <- liftIO $ isSocketAlive (_socketLocation socket)
                 if alive then do
                   debuggee <- liftIO $ 
@@ -1321,12 +1325,14 @@ app appStateRef = do
               Nothing -> Scotty.text "Selected socket not found"
       Connected socket debuggee mode -> do
         Scotty.html $ renderConnectedPage socket debuggee mode
+  {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
       state & majorState %~ \ st -> case st of 
         Setup st' d s -> Setup (toggleSetup st') d s
         other -> other
     Scotty.redirect "/"
+  {- Pauses debuggee -}
   Scotty.post "/pause" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
