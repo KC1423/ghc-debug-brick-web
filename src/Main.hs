@@ -1269,6 +1269,8 @@ renderConnectedPage socket debuggee mode = renderText $ case mode of
       button_ "Pause process" 
   PausedMode os -> do
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
+    form_ [method_ "post", action_ "/resume"] $
+      button_ "Resume process"
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1356,6 +1358,18 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/connect"     
       _ -> Scotty.redirect "/"
+  {- Resumes debuggee -}
+  Scotty.post "/resume" $ do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected socket debuggee (PausedMode _) -> do
+        liftIO $ resume debuggee
+        let newAppState = state & majorState . mode .~ RunningMode
+        liftIO $ writeIORef appStateRef newAppState
+        Scotty.redirect "/connect"
+      _ -> Scotty.redirect "/"  
+
+
   where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
