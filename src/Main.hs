@@ -1271,6 +1271,8 @@ renderConnectedPage socket debuggee mode = renderText $ case mode of
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
     form_ [method_ "post", action_ "/resume"] $
       button_ "Resume process"
+    form_ [method_ "post", action_ "/exit"] $
+      button_ "Exit"
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1368,6 +1370,25 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/connect"
       _ -> Scotty.redirect "/"  
+  {- Kill process or exit to selection screen -}
+  Scotty.post "/exit" $ do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected socket debuggee (PausedMode os) -> do
+        case view running_task os of
+          Just tid -> do
+            liftIO $ killThread tid
+            let newAppState = state & majorState . mode . pausedMode . running_task .~ Nothing
+                                    & majorState . mode . pausedMode %~ resetFooter
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect "/connect" 
+          Nothing -> do
+            liftIO $ resume debuggee
+            let newAppState = initialAppState (_appChan state)
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect "/"
+      _ -> Scotty.redirect "/"
+
 
 
   where mkSavedAndGCRootsIOTree debuggee' = do
