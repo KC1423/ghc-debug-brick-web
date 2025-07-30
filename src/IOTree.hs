@@ -30,7 +30,12 @@ module IOTree
   , viewCollapse
   , viewExpand
   , viewIsCollapsed
+
+  , renderIOTreeHtml
+  , defaultHtmlRow
   ) where
+
+import Lucid
 
 import           Brick
 import           Control.Applicative
@@ -402,3 +407,51 @@ listSet :: HasCallStack => Int -> a -> [a] -> [a]
 listSet i a as
   | i >= length as = error $ "listSet: index (" ++ show i ++ ") out of bounds [0 - " ++ show (length as) ++ ")"
   | otherwise = take i as ++ [a] ++ drop (i+1) as
+
+
+flattenTreeHtml :: [RowCtx] -> Int -> [IOTreeNode node name] -> [Int] -> [TreeNodeWithRenderContext node]
+flattenTreeHtml _ _ [] _ = []
+flattenTreeHtml depth minorIx (IOTreeNode node' csE : ns) path =
+  currentRow ++ children ++ flattenTreeHtml depth (minorIx + 1) ns path
+  where selected = path == [minorIx]
+        childIsSelected = case path of
+          (x:_) -> x == minorIx
+          _  -> False
+        rowCtx = if null ns then LastRow else NotLastRow
+        row state = TreeNodeWithRenderContext {
+          _nodeDepth = length depth,
+          _nodeState = state,
+          _nodeSelected = selected,
+          _nodeLast = rowCtx,
+          _nodeParentLast = depth,
+          _nodeContent = node'
+        }
+        (currentRow, children) = case csE of
+          Left _ -> ([row Collapsed], [])
+          Right cs -> let r = row (Expanded (null cs))
+                          cs' = flattenTreeHtml (rowCtx : depth) 0 cs (if childIsSelected then drop 1 path else [])
+                      in ([r], cs')
+
+renderTreeRowHtml :: (RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
+                  -> TreeNodeWithRenderContext node
+                  -> Html ()
+renderTreeRowHtml rowRenderer TreeNodeWithRenderContext{..} =
+  rowRenderer _nodeState _nodeSelected _nodeLast _nodeParentLast _nodeContent
+
+renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
+                                          -> (RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
+                                          -> Html ()
+renderIOTreeHtml (IOTree _ roots _ _ selection) renderRow =
+  let tree = flattenTreeHtml [] 0 roots selection
+  in div_ [class_ "iotree"] $
+       mconcat $ map (renderTreeRowHtml renderRow) tree
+
+defaultHtmlRow :: Show node => RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ()
+defaultHtmlRow state selected _depth _ctxs node = 
+  let prefix = case state of
+        Collapsed -> "> "
+        Expanded True -> "v (empty) "
+        Expanded False -> "v "
+      classStr = if selected then "tree-row selected" else "tree-row"
+  in div_ [class_ classStr] $ do
+       toHtml (prefix ++ show node)

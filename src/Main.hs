@@ -1273,6 +1273,8 @@ renderConnectedPage socket debuggee mode = renderText $ case mode of
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
+    let tree = _treeSavedAndGCRoots os
+    renderIOTreeHtml tree defaultHtmlRow
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
