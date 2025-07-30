@@ -22,6 +22,7 @@ import Data.IORef
 --import Data.Text (Text, pack)
 import qualified Data.Text.Lazy as TL
 import Lucid
+import qualified Control.Exception as E
 
 import Brick
 import Brick.BChan
@@ -1256,8 +1257,8 @@ renderAlreadyConnectedPage =
     form_ [method_ "get", action_ "/connect"] $ do
       button_ "See debuggee"
 
-renderConnectedPage :: SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
-renderConnectedPage socket debuggee mode = renderText $ case mode of
+renderConnectedPage :: Int -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
+renderConnectedPage ix socket debuggee mode = renderText $ case mode of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
@@ -1269,7 +1270,7 @@ renderConnectedPage socket debuggee mode = renderText $ case mode of
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    renderIOSummary tree renderSummary
+    renderIOSummary tree ix renderSummary
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
@@ -1294,10 +1295,11 @@ defaultHtmlRow state selected _depth _ctxs node =
   in div_ [class_ classStr] $ do
        toHtml (prefix ++ show node)
 
-renderClosureHtmlRow :: RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
-renderClosureHtmlRow state selected lastCtx parentCtxs closureDesc = 
-  div_ [class_ "tree-row"] $ do
-    renderClosureHtml closureDesc
+renderClosureHtmlRow :: Int -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
+renderClosureHtmlRow ix state selected lastCtx parentCtxs closureDesc = 
+  div_ [class_ "tree-row"] $
+    a_ [href_ ("/connect?selected=" <> pack (show ix))] $
+      renderClosureHtml closureDesc
 
 renderSummary :: RowState -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
 renderSummary _ _ _ (ClosureDetails c excSize info) = 
@@ -1343,8 +1345,10 @@ app appStateRef = do
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
+    selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
+    let ix = read selectedParam :: Int
     case state ^. majorState of
-      Connected socket debuggee mode -> Scotty.html (renderConnectedPage socket debuggee mode)
+      Connected socket debuggee mode -> Scotty.html (renderConnectedPage ix socket debuggee mode)
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
@@ -1372,12 +1376,16 @@ app appStateRef = do
                             _mode = RunningMode
                           }
                   liftIO $ writeIORef appStateRef newState
-                  Scotty.html $ renderConnectedPage socket debuggee RunningMode
+                  selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
+                  let ix = read selectedParam :: Int
+                  Scotty.html $ renderConnectedPage ix socket debuggee RunningMode
                 else do
                   Scotty.html $ "Error: socket not found"
               Nothing -> Scotty.text "Selected socket not found"
       Connected socket debuggee mode -> do
-        Scotty.html $ renderConnectedPage socket debuggee mode
+        selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
+        let ix = read selectedParam :: Int
+        Scotty.html $ renderConnectedPage ix socket debuggee mode
   {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 

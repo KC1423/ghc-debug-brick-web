@@ -438,24 +438,39 @@ renderTreeRowHtml :: (RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
 renderTreeRowHtml rowRenderer TreeNodeWithRenderContext{..} =
   rowRenderer _nodeState _nodeSelected _nodeLast _nodeParentLast _nodeContent
 
+renderTreeRowHtmlWithIndex :: Int
+                           -> (Int -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
+                           -> TreeNodeWithRenderContext node
+                           -> Html ()
+renderTreeRowHtmlWithIndex idx rowRenderer TreeNodeWithRenderContext{..} =
+  rowRenderer idx _nodeState _nodeSelected _nodeLast _nodeParentLast _nodeContent
+
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
-                                          -> (RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
+                                          -> (Int -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
                                           -> Html ()
 renderIOTreeHtml (IOTree _ roots _ _ selection) renderRow =
   let tree = flattenTreeHtml [] 0 roots selection
   in div_ [class_ "iotree"] $
-       mconcat $ map (renderTreeRowHtml renderRow) tree
+       mconcat $ --map (renderTreeRowHtml renderRow) tree
+         zipWith (\idx node -> 
+                    renderTreeRowHtmlWithIndex idx renderRow node)
+                  [0..] tree  
 
 renderIOSummary
   :: (Ord name, Show name)
   => IOTree node name
+  -> Int
   -> (RowState -> RowCtx -> [RowCtx] -> node -> Html ())
   -> Html ()
-renderIOSummary (IOTree _ roots _ _ selection) renderSummary = 
+renderIOSummary (IOTree _ roots _ _ selection) i renderSummary = 
   let tree = flattenTreeHtml [] 0 roots selection
-      maybeSelected = List.find _nodeSelected tree
   in div_ [class_ "iotree-container"] $ do
-       case maybeSelected of
+       case safeIndex tree i of
          Just (TreeNodeWithRenderContext{..}) -> 
            renderSummary _nodeState _nodeLast _nodeParentLast _nodeContent
          Nothing -> mempty
+  where safeIndex :: [a] -> Int -> Maybe a
+        safeIndex xs n
+          | n < 0 || n >= length xs = Nothing
+          | otherwise = Just (xs!!n)
+        
