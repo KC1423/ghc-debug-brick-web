@@ -1263,17 +1263,21 @@ renderConnectedPage socket debuggee mode = renderText $ case mode of
     form_ [method_ "post", action_ "/pause"] $ 
       button_ "Pause process" 
   PausedMode os -> do
+    let tree = _treeSavedAndGCRoots os
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
     form_ [method_ "post", action_ "/resume"] $
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    h2_ $ toHtml $ case os ^. treeMode of
+    renderIOSummary tree renderSummary
+    h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
-    let tree = _treeSavedAndGCRoots os
     renderIOTreeHtml tree renderClosureHtmlRow
+
+renderClosureDetailsHtml :: ClosureDetails -> Html ()
+renderClosureDetailsHtml (ClosureDetails closure _excSize info) = undefined
 
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
@@ -1294,7 +1298,30 @@ renderClosureHtmlRow :: RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails
 renderClosureHtmlRow state selected lastCtx parentCtxs closureDesc = 
   div_ [class_ "tree-row"] $ do
     renderClosureHtml closureDesc
-           
+
+renderSummary :: RowState -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
+renderSummary _ _ _ (ClosureDetails c excSize info) = 
+  case _sourceLocation info of
+    Just (SourceInformation name cty ty label' modu loc) -> 
+      div_ [class_ "closure-summary"] $ do
+        h3_ "Selected closure"
+        li_ $ strong_ "Name: " >> toHtml name
+        li_ $ strong_ "Closure type: " >> toHtml (show cty)
+        li_ $ strong_ "Label: " >> toHtml label'
+        li_ $ strong_ "Module: " >> toHtml modu
+        li_ $ strong_ "Location: " >> toHtml loc
+        li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
+    Nothing -> h3_ "No info found"
+{-
+        [ labelled "Name" $ vLimit 1 (str name)
+    , labelled "Closure type" $ vLimit 1 (str (show cty))
+    , labelled "Type" $ vLimit 3 (str ty)
+    , labelled "Label" $ vLimit 1 (str label')
+    , labelled "Module" $ vLimit 1 (str modu)
+    , labelled "Location" $ vLimit 1 (str loc)
+    ]
+-}
+
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do

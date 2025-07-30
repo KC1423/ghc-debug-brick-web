@@ -32,6 +32,7 @@ module IOTree
   , viewIsCollapsed
 
   , renderIOTreeHtml
+  , renderIOSummary
   ) where
 
 import Lucid
@@ -445,4 +446,16 @@ renderIOTreeHtml (IOTree _ roots _ _ selection) renderRow =
   in div_ [class_ "iotree"] $
        mconcat $ map (renderTreeRowHtml renderRow) tree
 
-
+renderIOSummary
+  :: (Ord name, Show name)
+  => IOTree node name
+  -> (RowState -> RowCtx -> [RowCtx] -> node -> Html ())
+  -> Html ()
+renderIOSummary (IOTree _ roots _ _ selection) renderSummary = 
+  let tree = flattenTreeHtml [] 0 roots selection
+      maybeSelected = List.find _nodeSelected tree
+  in div_ [class_ "iotree-container"] $ do
+       case maybeSelected of
+         Just (TreeNodeWithRenderContext{..}) -> 
+           renderSummary _nodeState _nodeLast _nodeParentLast _nodeContent
+         Nothing -> mempty
