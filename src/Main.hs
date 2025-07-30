@@ -265,11 +265,6 @@ renderClosureDetails (cd@(ClosureDetails {})) =
       [ txtLabel "Exclusive Size" <+> vSpace <+> renderBytes (GD.getSize $ _excSize cd)
       ]
     ]
-    {-++
-    [ hBox
-      [ txtLabel "Recursive Size" <+> vSpace <+> renderBytes 0
-      ]
-    ]-}
 renderClosureDetails ((LabelNode n)) = txt n
 renderClosureDetails ((InfoDetails info')) = vLimit 8 $ vBox $ renderInfoInfo info'
 renderClosureDetails (CCSDetails _ _ptr (Debug.CCSPayload{..})) = vLimit 8 $ vBox $
@@ -1273,8 +1268,33 @@ renderConnectedPage socket debuggee mode = renderText $ case mode of
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
+    h2_ $ toHtml $ case os ^. treeMode of
+        SavedAndGCRoots {} -> pack "Root Closures"
+        Retainer {} -> pack "Retainers"
+        Searched {} -> pack "Search Results"
     let tree = _treeSavedAndGCRoots os
-    renderIOTreeHtml tree defaultHtmlRow
+    renderIOTreeHtml tree renderClosureHtmlRow
+
+renderClosureHtml :: ClosureDetails -> Html ()
+renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ _labelInParent info <> " | " <> pack (closureShowAddress closure) <> " | " <> _pretty info 
+
+
+defaultHtmlRow :: Show node => RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ()
+defaultHtmlRow state selected _depth _ctxs node = 
+  let prefix = case state of
+        Collapsed -> "> "
+        Expanded True -> "v (empty) "
+        Expanded False -> "v "
+      classStr = if selected then "tree-row selected" else "tree-row"
+  in div_ [class_ classStr] $ do
+       toHtml (prefix ++ show node)
+
+renderClosureHtmlRow :: RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
+renderClosureHtmlRow state selected lastCtx parentCtxs closureDesc = 
+  div_ [class_ "tree-row"] $ do
+    renderClosureHtml closureDesc
+           
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do

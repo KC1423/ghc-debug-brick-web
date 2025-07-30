@@ -32,7 +32,6 @@ module IOTree
   , viewIsCollapsed
 
   , renderIOTreeHtml
-  , defaultHtmlRow
   ) where
 
 import Lucid
@@ -446,12 +445,4 @@ renderIOTreeHtml (IOTree _ roots _ _ selection) renderRow =
   in div_ [class_ "iotree"] $
        mconcat $ map (renderTreeRowHtml renderRow) tree
 
-defaultHtmlRow :: Show node => RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ()
-defaultHtmlRow state selected _depth _ctxs node = 
-  let prefix = case state of
-        Collapsed -> "> "
-        Expanded True -> "v (empty) "
-        Expanded False -> "v "
-      classStr = if selected then "tree-row selected" else "tree-row"
-  in div_ [class_ classStr] $ do
-       toHtml (prefix ++ show node)
+
