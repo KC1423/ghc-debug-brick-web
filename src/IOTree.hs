@@ -468,17 +468,29 @@ renderIOSummary
   :: (Ord name, Show name)
   => IOTree node name
   -> [[Int]]
-  -> Int
+  -> [Int]
   -> (RowState -> RowCtx -> [RowCtx] -> node -> Html ())
   -> Html ()
-renderIOSummary (IOTree _ roots _ _ selection) expandedPaths i renderSummary = 
-  let tree = flattenTreeHtml [] 0 roots selection expandedPaths []
-  in div_ [class_ "iotree-container"] $ do
-       case safeIndex tree i of
-         Just (TreeNodeWithRenderContext{..}) -> 
-           renderSummary _nodeState _nodeLast _nodeParentLast _nodeContent
-         Nothing -> mempty
-  where safeIndex :: [a] -> Int -> Maybe a
-        safeIndex xs n
-          | n < 0 || n >= length xs = Nothing
-          | otherwise = Just (xs!!n)
+renderIOSummary (IOTree _ roots _ _ _) expandedPaths path renderSummary = 
+  div_ [class_ "iotree-container"] $ do
+    case findNodeByPath [] roots path expandedPaths of
+      Just (state, rowCtx, parentCtxs, node) ->
+        renderSummary state rowCtx parentCtxs node
+      Nothing -> mempty
+  where findNodeByPath _ [] _ _ = Nothing
+        findNodeByPath parentCtxs (n@(IOTreeNode node' csE) : rest) path@(i:is) expanded = 
+          if i == 0 then
+            let rowCtx = if null rest then LastRow else NotLastRow
+                isExpanded = path `elem` expanded
+                state = case csE of 
+                  Left _ -> Collapsed
+                  Right cs -> Expanded (null cs)
+            in case csE of
+                 Left _ -> if null is
+                           then Just (state, rowCtx, parentCtxs, node')
+                           else Nothing
+                 Right cs ->
+                   if null is
+                     then Just (state, rowCtx, parentCtxs, node')
+                     else findNodeByPath (rowCtx : parentCtxs) cs is expanded
+           else findNodeByPath parentCtxs rest (i-1 : is) expanded 

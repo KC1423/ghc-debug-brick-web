@@ -1270,7 +1270,7 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    renderIOSummary tree expandedPaths ix renderSummary
+    renderIOSummary tree expandedPaths [ix] renderSummary -- <-- FIX THIS
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
