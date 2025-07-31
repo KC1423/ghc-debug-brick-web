@@ -23,6 +23,7 @@ import Data.IORef
 import qualified Data.Text.Lazy as TL
 import Lucid
 import qualified Control.Exception as E
+import qualified Data.Set as Set
 
 import Brick
 import Brick.BChan
@@ -1221,7 +1222,6 @@ myAppHandleEvent brickEvent = do
 
         where
 
-
         mkSavedAndGCRootsIOTree = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
@@ -1229,7 +1229,6 @@ myAppHandleEvent brickEvent = do
           savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
           return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
-
 
 {- New code here -}
 
@@ -1448,14 +1447,46 @@ app appStateRef = do
 
 
 
-  where mkSavedAndGCRootsIOTree debuggee' = do
+  where 
+        mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
           raw_saved <- map ("Saved Object",) <$> GD.savedClosures debuggee'
           savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
-          return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
+          expandedRoots <- mapM (expandNode debuggee' Set.empty) (savedClosures' {-++ rootClosures'-})
+          let resTree = IOTree { 
+              _name = Connected_Paused_ClosureTree
+            , _roots = expandedRoots
+            , _getChildren = const (return [])
+            , _renderRow = undefined
+            , _selection = []
+            }
+          return $ ( resTree --mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
+
+
+
+expandNode :: Debuggee -> Set.Set String -> ClosureDetails -> IO (IOTreeNode ClosureDetails Name)
+expandNode debuggee visited node@(ClosureDetails c _ _) = 
+  let ptr = closureShowAddress c
+  in if Set.member ptr visited 
+     then do 
+       return $ IOTreeNode node (Right [])
+     else do
+       children <- getChildren debuggee node
+       expandedChildren <- mapM (expandNode debuggee (Set.insert ptr visited)) children
+       return $ IOTreeNode
+         { _node = node,
+           _children = Right expandedChildren
+         }
+expandNode debuggee s node = do
+  children <- getChildren debuggee node
+  expandedChildren <- mapM (expandNode debuggee s) children
+  return $ IOTreeNode
+    { _node = node,
+      _children = Right expandedChildren
+    }
 
  
 

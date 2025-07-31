@@ -6,7 +6,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module IOTree
-  ( IOTree
+  ( IOTree(..)
   , IOTreePath
   , RowState(..)
   , RowCtx(..)
@@ -33,6 +33,7 @@ module IOTree
 
   , renderIOTreeHtml
   , renderIOSummary
+  , IOTreeNode(..)
   ) where
 
 import Lucid
@@ -474,3 +475,34 @@ renderIOSummary (IOTree _ roots _ _ selection) i renderSummary =
           | n < 0 || n >= length xs = Nothing
           | otherwise = Just (xs!!n)
         
+
+{- new stuff -}
+type DataTree node name = [IOTreeNode node name]
+convertToDataTree :: IOTree node name -> DataTree node name
+convertToDataTree tree = _roots tree
+{-
+data IOTree node name = IOTree
+    { _name :: name
+    , _roots :: [IOTreeNode node name]
+    , _getChildren :: (node -> IO [node])
+    , _renderRow :: RowState     -- is row expanded?
+                 -> Bool         -- is row selected?
+                 -> RowCtx       -- is current node last in subtree?
+                 -> [RowCtx]     -- per level of tree depth, are parent nodes last in subtree?
+                 -> node         -- the node to render
+                 -> Widget name
+    -- Render some extra info as the first child of each node
+    , _selection :: [Int]
+    -- ^ Indices along the path to the current selection. Empty list means no
+    -- selection.
+    }
+
+data IOTreeNode node name
+  = IOTreeNode
+    { _node :: node
+      -- ^ Current node
+    , _children :: Either
+        (IO [IOTreeNode node name])  -- Node is collapsed
+        [IOTreeNode node name]       -- Node is expanded
+    }
+-}
