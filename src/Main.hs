@@ -1457,7 +1457,7 @@ app appStateRef = do
 
 
 
-  where 
+  where {- Currently just shows saved objects, not GC roots, PLEASE FIX-}
         mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
