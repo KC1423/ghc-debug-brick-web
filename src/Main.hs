@@ -24,6 +24,7 @@ import qualified Data.Text.Lazy as TL
 import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
+import Data.List.Split (splitOn)
 
 import Brick
 import Brick.BChan
@@ -1256,8 +1257,8 @@ renderAlreadyConnectedPage =
     form_ [method_ "get", action_ "/connect"] $ do
       button_ "See debuggee"
 
-renderConnectedPage :: Int -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
-renderConnectedPage ix socket debuggee mode = renderText $ case mode of
+renderConnectedPage :: [[Int]] -> Int -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
+renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mode of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
@@ -1269,12 +1270,12 @@ renderConnectedPage ix socket debuggee mode = renderText $ case mode of
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    renderIOSummary tree ix renderSummary
+    renderIOSummary tree expandedPaths ix renderSummary
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
-    renderIOTreeHtml tree renderClosureHtmlRow
+    renderIOTreeHtml tree expandedPaths renderClosureHtmlRow
 
 renderClosureDetailsHtml :: ClosureDetails -> Html ()
 renderClosureDetailsHtml (ClosureDetails closure _excSize info) = undefined
@@ -1323,6 +1324,9 @@ renderSummary _ _ _ (ClosureDetails c excSize info) =
     ]
 -}
 
+parsePaths :: String -> [[Int]]
+parsePaths [] = []
+parsePaths s = map (map read . splitOn ".") (splitOn "," s)
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1345,9 +1349,11 @@ app appStateRef = do
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
     selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
+    expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
     let ix = read selectedParam :: Int
+    let expandedPaths = parsePaths expandedParam
     case state ^. majorState of
-      Connected socket debuggee mode -> Scotty.html (renderConnectedPage ix socket debuggee mode)
+      Connected socket debuggee mode -> Scotty.html (renderConnectedPage expandedPaths ix socket debuggee mode)
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
@@ -1376,15 +1382,19 @@ app appStateRef = do
                           }
                   liftIO $ writeIORef appStateRef newState
                   selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
+                  expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
                   let ix = read selectedParam :: Int
-                  Scotty.html $ renderConnectedPage ix socket debuggee RunningMode
+                  let expandedPaths = parsePaths expandedParam
+                  Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee RunningMode
                 else do
                   Scotty.html $ "Error: socket not found"
               Nothing -> Scotty.text "Selected socket not found"
       Connected socket debuggee mode -> do
         selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
+        expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
         let ix = read selectedParam :: Int
-        Scotty.html $ renderConnectedPage ix socket debuggee mode
+        let expandedPaths = parsePaths expandedParam
+        Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee mode
   {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
@@ -1465,7 +1475,7 @@ app appStateRef = do
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
 
-
+--dummyExpandedPaths = [[1],[9],[9,0]]--[[0], [1], [2], [3]]
 
 expandNode :: Debuggee -> Set.Set String -> ClosureDetails -> IO (IOTreeNode ClosureDetails Name)
 expandNode debuggee visited node@(ClosureDetails c _ _) = 
