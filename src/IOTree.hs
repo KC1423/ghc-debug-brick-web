@@ -32,13 +32,11 @@ module IOTree
   , viewIsCollapsed
 
   , renderIOTreeHtml
-  , renderIOTreeHtmlTree
   , renderIOSummary
   , IOTreeNode(..)
   ) where
 
 import Lucid
-import Debug.Trace (trace)
 
 import           Brick
 import           Control.Applicative
@@ -411,36 +409,7 @@ listSet i a as
   | i >= length as = error $ "listSet: index (" ++ show i ++ ") out of bounds [0 - " ++ show (length as) ++ ")"
   | otherwise = take i as ++ [a] ++ drop (i+1) as
 
-
-flattenTreeHtml :: [RowCtx] -> Int -> [IOTreeNode node name] -> [Int] -> [[Int]] -> [Int] -> [TreeNodeWithRenderContext node]
-flattenTreeHtml _ _ [] _ _ _ = []
-flattenTreeHtml depth minorIx (IOTreeNode node' csE : ns) path expandedPaths prefix =
-  currentRow ++ children ++ flattenTreeHtml depth (minorIx + 1) ns path expandedPaths prefix
-  where currentPath = prefix ++ [minorIx]
-        selected = currentPath == path
-        expanded = currentPath `elem` expandedPaths
-        childIsSelected = case path of
-                            (x:_) -> x == minorIx
-                            _ -> False
-        rowCtx = if null ns then LastRow else NotLastRow
-        row state = TreeNodeWithRenderContext {
-          _nodeDepth = length depth,
-          _nodeState = state,
-          _nodeSelected = selected,
-          _nodeLast = rowCtx,
-          _nodeParentLast = depth,
-          _nodeContent = node'
-        }
-        (currentRow, children) = case csE of
-          Left _ -> ([row Collapsed], [])
-          Right cs ->
-            if expanded
-              then let r = row (Expanded (null cs))
-                       cs' = flattenTreeHtml (rowCtx : depth) 0 cs (if childIsSelected then drop 1 path else []) expandedPaths currentPath
-                   in ([r], cs')
-              else ([row Collapsed], [])
-
-flattenTreeHtmlTree
+flattenTreeHtml
   :: [RowCtx]
   -> Int
   -> [IOTreeNode node name]
@@ -448,14 +417,14 @@ flattenTreeHtmlTree
   -> [[Int]]
   -> [Int]
   -> [RenderTree (TreeNodeWithRenderContext node)]
-flattenTreeHtmlTree _ _ [] _ _ _ = []
-flattenTreeHtmlTree depth minorIx (IOTreeNode node' csE : ns) selection expandedPaths parentPath =
+flattenTreeHtml _ _ [] _ _ _ = []
+flattenTreeHtml depth minorIx (IOTreeNode node' csE : ns) selection expandedPaths parentPath =
   let thisPath = parentPath ++ [minorIx]
       childIsSelected = selection `isChildOf` thisPath
       rowCtx = if null ns then LastRow else NotLastRow
       treeNode = TreeNodeWithRenderContext {
         _nodeDepth = length depth,
-        _nodeState = undefined,
+        _nodeState = Expanded True,
         _nodeSelected = False,
         _nodeLast = rowCtx,
         _nodeParentLast = depth,
@@ -465,9 +434,9 @@ flattenTreeHtmlTree depth minorIx (IOTreeNode node' csE : ns) selection expanded
         Left _ -> []
         Right cs ->
           if thisPath `elem` expandedPaths
-          then flattenTreeHtmlTree (rowCtx : depth) 0 cs (if childIsSelected then drop 1 selection else []) expandedPaths thisPath
+          then flattenTreeHtml (rowCtx : depth) 0 cs (if childIsSelected then drop 1 selection else []) expandedPaths thisPath
           else []
-  in RenderNode treeNode children : flattenTreeHtmlTree depth (minorIx + 1) ns selection expandedPaths parentPath
+  in RenderNode treeNode children : flattenTreeHtml depth (minorIx + 1) ns selection expandedPaths parentPath
   where isChildOf :: Eq a => [a] -> [a] -> Bool
         isChildOf (x:xs) (y:ys) = x == y && isChildOf xs ys
         isChildOf [] _ = True
@@ -488,22 +457,10 @@ renderTreeRowHtmlWithIndex idx rowRenderer TreeNodeWithRenderContext{..} =
 
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
                                           -> [[Int]]
-                                          -> (Int -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
+                                          -> ([Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
                                           -> Html ()
-renderIOTreeHtml (IOTree _ roots _ _ selection) expandedPaths renderRow =
-  let tree = flattenTreeHtml [] 0 roots selection expandedPaths []
-  in div_ [class_ "iotree"] $
-       mconcat $ --map (renderTreeRowHtml renderRow) tree
-         zipWith (\idx node -> 
-                    renderTreeRowHtmlWithIndex idx renderRow node)
-                  [0..] tree  
-
-renderIOTreeHtmlTree :: (Ord name, Show name) => IOTree node name 
-                                              -> [[Int]]
-                                              -> ([Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
-                                              -> Html ()
-renderIOTreeHtmlTree (IOTree _ roots _ _ _) expandedPaths renderRow =
-  let tree = flattenTreeHtmlTree [] 0 roots [] expandedPaths []
+renderIOTreeHtml (IOTree _ roots _ _ _) expandedPaths renderRow =
+  let tree = flattenTreeHtml [] 0 roots [] expandedPaths []
   in div_ [class_ "iotree"] $
        go [] tree
   where go _ [] = mempty

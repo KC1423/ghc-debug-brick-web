@@ -1275,7 +1275,7 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
-    renderIOTreeHtmlTree tree expandedPaths renderClosureHtmlRow
+    renderIOTreeHtml tree expandedPaths renderClosureHtmlRow
 
 renderClosureDetailsHtml :: ClosureDetails -> Html ()
 renderClosureDetailsHtml (ClosureDetails closure _excSize info) = undefined
@@ -1296,10 +1296,18 @@ defaultHtmlRow state selected _depth _ctxs node =
        toHtml (prefix ++ show node)
 
 renderClosureHtmlRow :: [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
-renderClosureHtmlRow ix state selected lastCtx parentCtxs closureDesc = 
-  div_ [class_ "tree-row"] $
-    a_ [href_ ("/connect?selected=" <> pack (List.intercalate "." $ map show ix))] $
-      renderClosureHtml closureDesc
+renderClosureHtmlRow ix state selected lastCtx parentCtxs closureDesc =
+  let depth = length ix
+      indentPx = depth * 20
+      classStr = "tree-row" <> if selected then " selected" else ""
+      styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px;")
+      pathStr = pack $ List.intercalate "." $ map show ix
+  in div_ [class_ classStr, styleAttr] $ do
+      {-form_ [method_ "post", action_ "/connect", style_ "display:inline"] $ do
+        input_ [type_ "hidden", name_ "toggle", value_ pathStr]
+        button_ [type_ "submit", class_ "expand-button"] $ toHtml (">" :: String)-}
+      a_ [href_ ("/connect?selected=" <> pathStr)] $ renderClosureHtml closureDesc
+
 
 renderSummary :: RowState -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
 renderSummary _ _ _ (ClosureDetails c excSize info) = 
@@ -1313,23 +1321,24 @@ renderSummary _ _ _ (ClosureDetails c excSize info) =
         li_ $ strong_ "Module: " >> toHtml modu
         li_ $ strong_ "Location: " >> toHtml loc
         li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
-    Nothing -> h3_ "No info found"
-{-
-        [ labelled "Name" $ vLimit 1 (str name)
-    , labelled "Closure type" $ vLimit 1 (str (show cty))
-    , labelled "Type" $ vLimit 3 (str ty)
-    , labelled "Label" $ vLimit 1 (str label')
-    , labelled "Module" $ vLimit 1 (str modu)
-    , labelled "Location" $ vLimit 1 (str loc)
-    ]
--}
+    Nothing -> 
+      div_ [class_ "closure-summary"] $ do
+        h3_ "Selected closure"
+        li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
 
 parsePaths :: String -> [[Int]]
 parsePaths [] = []
 parsePaths s = map (map read . splitOn ".") (splitOn "," s)
 
 parsePath :: String -> [Int]
-parsePath = map read . splitOn "."
+parsePath [] = []
+parsePath s = map read $ splitOn "." s
+
+togglePath :: [Int] -> [[Int]] -> [[Int]]
+togglePath xs [] = [xs]
+togglePath xs (xs':xss)
+  | xs == xs' = xss
+  | otherwise = xs' : togglePath xs xss
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1360,14 +1369,13 @@ app appStateRef = do
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
-    socketPath <- Scotty.formParam "socket"
-    Scotty.html $ socketPath
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Setup st knownDebuggees knownSnapshots -> do
         case st of
           Snapshot -> Scotty.text "snapshot selected: please define me!"
           Socket -> do
+            socketPath <- Scotty.formParam "socket"
             let socketList = F.toList (knownDebuggees ^. listElementsL)
                 msocket = F.find (\s -> TL.fromStrict (socketName s) == socketPath) socketList
             case msocket of
