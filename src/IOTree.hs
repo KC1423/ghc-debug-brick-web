@@ -424,7 +424,7 @@ flattenTreeHtml depth minorIx (IOTreeNode node' csE : ns) selection expandedPath
       rowCtx = if null ns then LastRow else NotLastRow
       treeNode = TreeNodeWithRenderContext {
         _nodeDepth = length depth,
-        _nodeState = Expanded True,
+        _nodeState = Expanded (thisPath `elem` expandedPaths), --Expanded True,
         _nodeSelected = False,
         _nodeLast = rowCtx,
         _nodeParentLast = depth,
@@ -457,7 +457,7 @@ renderTreeRowHtmlWithIndex idx rowRenderer TreeNodeWithRenderContext{..} =
 
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
                                           -> [[Int]]
-                                          -> ([Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
+                                          -> ([[Int]] -> [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
                                           -> Html ()
 renderIOTreeHtml (IOTree _ roots _ _ _) expandedPaths renderRow =
   let tree = flattenTreeHtml [] 0 roots [] expandedPaths []
@@ -467,7 +467,7 @@ renderIOTreeHtml (IOTree _ roots _ _ _) expandedPaths renderRow =
         go parentPath trees = mconcat $ zipWith renderOne [0..] trees
           where renderOne ix (RenderNode TreeNodeWithRenderContext{..} children) =
                   let thisPath = parentPath ++ [ix]
-                      rowHtml = renderRow thisPath _nodeState _nodeSelected _nodeLast _nodeParentLast _nodeContent
+                      rowHtml = renderRow expandedPaths thisPath _nodeState _nodeSelected _nodeLast _nodeParentLast _nodeContent
                       childHtml = go thisPath children
                   in rowHtml <> childHtml
 

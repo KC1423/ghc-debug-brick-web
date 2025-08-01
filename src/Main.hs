@@ -19,12 +19,12 @@ module Main where
 
 import qualified Web.Scotty as Scotty
 import Data.IORef
---import Data.Text (Text, pack)
 import qualified Data.Text.Lazy as TL
 import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
+import Debug.Trace
 
 import Brick
 import Brick.BChan
@@ -1295,18 +1295,23 @@ defaultHtmlRow state selected _depth _ctxs node =
   in div_ [class_ classStr] $ do
        toHtml (prefix ++ show node)
 
-renderClosureHtmlRow :: [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
-renderClosureHtmlRow ix state selected lastCtx parentCtxs closureDesc =
+renderClosureHtmlRow :: [[Int]] -> [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
+renderClosureHtmlRow expandedPaths ix state selected lastCtx parentCtxs closureDesc =
   let depth = length ix
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
-      styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px;")
+      styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
       pathStr = pack $ List.intercalate "." $ map show ix
+      expandedStr = pack $ List.intercalate "," $ map (List.intercalate "." . map show) expandedPaths
   in div_ [class_ classStr, styleAttr] $ do
-      {-form_ [method_ "post", action_ "/connect", style_ "display:inline"] $ do
+      form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
-        button_ [type_ "submit", class_ "expand-button"] $ toHtml (">" :: String)-}
-      a_ [href_ ("/connect?selected=" <> pathStr)] $ renderClosureHtml closureDesc
+        input_ [type_ "hidden", name_ "selected", value_ pathStr]
+        input_ [type_ "hidden", name_ "expanded", value_ expandedStr]
+        button_ [type_ "submit", class_ "expand-button"] $ 
+          toHtml $ case state of
+                     Expanded b -> if b then "+" else "-" :: String
+      a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ renderClosureHtml closureDesc
 
 
 renderSummary :: RowState -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
@@ -1334,11 +1339,8 @@ parsePath :: String -> [Int]
 parsePath [] = []
 parsePath s = map read $ splitOn "." s
 
-togglePath :: [Int] -> [[Int]] -> [[Int]]
-togglePath xs [] = [xs]
-togglePath xs (xs':xss)
-  | xs == xs' = xss
-  | otherwise = xs' : togglePath xs xss
+togglePath :: Eq a => [a] -> [[a]] -> [[a]]
+togglePath x xs = if x `elem` xs then filter (/=x) xs else x:xs
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1465,6 +1467,23 @@ app appStateRef = do
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/"
       _ -> Scotty.redirect "/"
+  Scotty.post "/toggle" $ do
+    selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
+    togglePathParam <- Scotty.param "toggle" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
+    expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
+    let ix = parsePath selectedParam
+    let toggleIx = parsePath togglePathParam
+    let expandedPaths = togglePath toggleIx (parsePaths expandedParam)
+    let selectedStr = pack $ List.intercalate "." $ map show ix
+    let expandedStr = pack $ List.intercalate "," $ map (List.intercalate "." . map show) expandedPaths 
+    liftIO $ putStrLn $ show ix ++ " " ++ show toggleIx ++ " " ++ show expandedPaths
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr <> "&expanded=" <> TL.fromStrict expandedStr
+        --Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee mode
+      _ -> Scotty.redirect "/"
+
 
 
 
@@ -1482,7 +1501,7 @@ app appStateRef = do
             , _renderRow = undefined
             , _selection = []
             }
-          return $ ( resTree --mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
+          return $ ( resTree
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
 
