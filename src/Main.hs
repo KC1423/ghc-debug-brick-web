@@ -1275,7 +1275,7 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
-    renderIOTreeHtml tree expandedPaths renderClosureHtmlRow
+    renderIOTreeHtml tree ix expandedPaths renderClosureHtmlRow
 
 renderClosureDetailsHtml :: ClosureDetails -> Html ()
 renderClosureDetailsHtml (ClosureDetails closure _excSize info) = undefined
@@ -1295,18 +1295,19 @@ defaultHtmlRow state selected _depth _ctxs node =
   in div_ [class_ classStr] $ do
        toHtml (prefix ++ show node)
 
-renderClosureHtmlRow :: [[Int]] -> [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
-renderClosureHtmlRow expandedPaths ix state selected lastCtx parentCtxs closureDesc =
+renderClosureHtmlRow :: [Int] -> [[Int]] -> [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
+renderClosureHtmlRow selectedPath expandedPaths ix state selected lastCtx parentCtxs closureDesc =
   let depth = length ix
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
       styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
       pathStr = pack $ List.intercalate "." $ map show ix
+      selectedStr = pack $ List.intercalate "." $ map show selectedPath
       expandedStr = pack $ List.intercalate "," $ map (List.intercalate "." . map show) expandedPaths
   in div_ [class_ classStr, styleAttr] $ do
       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
-        input_ [type_ "hidden", name_ "selected", value_ pathStr]
+        input_ [type_ "hidden", name_ "selected", value_ selectedStr]
         input_ [type_ "hidden", name_ "expanded", value_ expandedStr]
         button_ [type_ "submit", class_ "expand-button"] $ 
           toHtml $ case state of
@@ -1468,20 +1469,18 @@ app appStateRef = do
             Scotty.redirect "/"
       _ -> Scotty.redirect "/"
   Scotty.post "/toggle" $ do
-    selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
-    togglePathParam <- Scotty.param "toggle" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-    expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
+    togglePathParam <- Scotty.formParam "toggle" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
+    selectedParam <- Scotty.formParam "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
+    expandedParam <- Scotty.formParam "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
     let ix = parsePath selectedParam
     let toggleIx = parsePath togglePathParam
     let expandedPaths = togglePath toggleIx (parsePaths expandedParam)
     let selectedStr = pack $ List.intercalate "." $ map show ix
     let expandedStr = pack $ List.intercalate "," $ map (List.intercalate "." . map show) expandedPaths 
-    liftIO $ putStrLn $ show ix ++ " " ++ show toggleIx ++ " " ++ show expandedPaths
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected socket debuggee mode ->
         Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr <> "&expanded=" <> TL.fromStrict expandedStr
-        --Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee mode
       _ -> Scotty.redirect "/"
 
 

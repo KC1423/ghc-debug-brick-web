@@ -456,10 +456,11 @@ renderTreeRowHtmlWithIndex idx rowRenderer TreeNodeWithRenderContext{..} =
   rowRenderer idx _nodeState _nodeSelected _nodeLast _nodeParentLast _nodeContent
 
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
+                                          -> [Int]
                                           -> [[Int]]
-                                          -> ([[Int]] -> [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
+                                          -> ([Int] -> [[Int]] -> [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ())
                                           -> Html ()
-renderIOTreeHtml (IOTree _ roots _ _ _) expandedPaths renderRow =
+renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath expandedPaths renderRow =
   let tree = flattenTreeHtml [] 0 roots [] expandedPaths []
   in div_ [class_ "iotree"] $
        go [] tree
@@ -467,7 +468,7 @@ renderIOTreeHtml (IOTree _ roots _ _ _) expandedPaths renderRow =
         go parentPath trees = mconcat $ zipWith renderOne [0..] trees
           where renderOne ix (RenderNode TreeNodeWithRenderContext{..} children) =
                   let thisPath = parentPath ++ [ix]
-                      rowHtml = renderRow expandedPaths thisPath _nodeState _nodeSelected _nodeLast _nodeParentLast _nodeContent
+                      rowHtml = renderRow selectedPath expandedPaths thisPath _nodeState _nodeSelected _nodeLast _nodeParentLast _nodeContent
                       childHtml = go thisPath children
                   in rowHtml <> childHtml
 
