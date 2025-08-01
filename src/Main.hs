@@ -1257,7 +1257,7 @@ renderAlreadyConnectedPage =
     form_ [method_ "get", action_ "/connect"] $ do
       button_ "See debuggee"
 
-renderConnectedPage :: [[Int]] -> Int -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
+renderConnectedPage :: [[Int]] -> [Int] -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
 renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mode of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
@@ -1270,12 +1270,12 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    renderIOSummary tree expandedPaths [ix] renderSummary -- <-- FIX THIS
+    renderIOSummary tree ix renderSummary
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
-    renderIOTreeHtml tree expandedPaths renderClosureHtmlRow
+    renderIOTreeHtmlTree tree expandedPaths renderClosureHtmlRow
 
 renderClosureDetailsHtml :: ClosureDetails -> Html ()
 renderClosureDetailsHtml (ClosureDetails closure _excSize info) = undefined
@@ -1295,10 +1295,10 @@ defaultHtmlRow state selected _depth _ctxs node =
   in div_ [class_ classStr] $ do
        toHtml (prefix ++ show node)
 
-renderClosureHtmlRow :: Int -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
+renderClosureHtmlRow :: [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
 renderClosureHtmlRow ix state selected lastCtx parentCtxs closureDesc = 
   div_ [class_ "tree-row"] $
-    a_ [href_ ("/connect?selected=" <> pack (show ix))] $
+    a_ [href_ ("/connect?selected=" <> pack (List.intercalate "." $ map show ix))] $
       renderClosureHtml closureDesc
 
 renderSummary :: RowState -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
@@ -1328,6 +1328,9 @@ parsePaths :: String -> [[Int]]
 parsePaths [] = []
 parsePaths s = map (map read . splitOn ".") (splitOn "," s)
 
+parsePath :: String -> [Int]
+parsePath = map read . splitOn "."
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Main page where sockets/snapshots can be selected for debugging -}
@@ -1350,7 +1353,7 @@ app appStateRef = do
     state <- liftIO $ readIORef appStateRef
     selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
     expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-    let ix = read selectedParam :: Int
+    let ix = parsePath selectedParam
     let expandedPaths = parsePaths expandedParam
     case state ^. majorState of
       Connected socket debuggee mode -> Scotty.html (renderConnectedPage expandedPaths ix socket debuggee mode)
@@ -1383,7 +1386,7 @@ app appStateRef = do
                   liftIO $ writeIORef appStateRef newState
                   selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
                   expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-                  let ix = read selectedParam :: Int
+                  let ix = parsePath selectedParam
                   let expandedPaths = parsePaths expandedParam
                   Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee RunningMode
                 else do
@@ -1392,7 +1395,7 @@ app appStateRef = do
       Connected socket debuggee mode -> do
         selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
         expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-        let ix = read selectedParam :: Int
+        let ix = parsePath selectedParam
         let expandedPaths = parsePaths expandedParam
         Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee mode
   {- Toggles between socket and snapshot mode when selecting -}
