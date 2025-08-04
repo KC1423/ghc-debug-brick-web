@@ -1257,6 +1257,13 @@ renderAlreadyConnectedPage =
     form_ [method_ "get", action_ "/connect"] $ do
       button_ "See debuggee"
 
+renderBadSocketPage :: TL.Text
+renderBadSocketPage =
+  renderText $ do
+    h1_ "Error: No debuggee this socket"
+    form_ [method_ "get", action_ "/"] $ do
+      button_ "Select another socket"
+
 renderConnectedPage :: [[Int]] -> [Int] -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
 renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mode of
   RunningMode -> do
@@ -1284,39 +1291,27 @@ renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ _labelInParent info <> " | " <> pack (closureShowAddress closure) <> " | " <> _pretty info 
 
-
-defaultHtmlRow :: Show node => RowState -> Bool -> RowCtx -> [RowCtx] -> node -> Html ()
-defaultHtmlRow state selected _depth _ctxs node = 
-  let prefix = case state of
-        Collapsed -> "> "
-        Expanded True -> "v (empty) "
-        Expanded False -> "v "
-      classStr = if selected then "tree-row selected" else "tree-row"
-  in div_ [class_ classStr] $ do
-       toHtml (prefix ++ show node)
-
-renderClosureHtmlRow :: [Int] -> [[Int]] -> [Int] -> RowState -> Bool -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
-renderClosureHtmlRow selectedPath expandedPaths ix state selected lastCtx parentCtxs closureDesc =
-  let depth = length ix
+renderClosureHtmlRow :: [Int] -> [[Int]] -> [Int] -> Bool -> Bool -> ClosureDetails -> Html ()
+renderClosureHtmlRow selectedPath expandedPaths thisPath expanded selected closureDesc =
+  let depth = length thisPath
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
       styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
-      pathStr = pack $ List.intercalate "." $ map show ix
-      selectedStr = pack $ List.intercalate "." $ map show selectedPath
-      expandedStr = pack $ List.intercalate "," $ map (List.intercalate "." . map show) expandedPaths
+      pathStr = pack $ encodePath thisPath
+      selectedStr = pack $ encodePath selectedPath
+      expandedStr = pack $ encodePaths expandedPaths
   in div_ [class_ classStr, styleAttr] $ do
       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
         input_ [type_ "hidden", name_ "selected", value_ selectedStr]
         input_ [type_ "hidden", name_ "expanded", value_ expandedStr]
         button_ [type_ "submit", class_ "expand-button"] $ 
-          toHtml $ case state of
-                     Expanded b -> if b then "+" else "-" :: String
+          toHtml $ if expanded then "+" else "-" :: String
       a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ renderClosureHtml closureDesc
 
 
-renderSummary :: RowState -> RowCtx -> [RowCtx] -> ClosureDetails -> Int -> Html ()
-renderSummary _ _ _ (ClosureDetails c excSize info) incSize = 
+renderSummary :: ClosureDetails -> Int -> Html ()
+renderSummary (ClosureDetails c excSize info) incSize = 
   case _sourceLocation info of
     Just (SourceInformation name cty ty label' modu loc) -> 
       div_ [class_ "closure-summary"] $ do
@@ -1355,8 +1350,27 @@ parsePath :: String -> [Int]
 parsePath [] = []
 parsePath s = map read $ splitOn "." s
 
+encodePath :: [Int] -> String
+encodePath = List.intercalate "." . map show
+
+encodePaths :: [[Int]] -> String
+encodePaths = List.intercalate "," . map encodePath
+
 togglePath :: Eq a => [a] -> [[a]] -> [[a]]
 togglePath x xs = if x `elem` xs then filter (/=x) xs else x:xs
+
+-- Helper function for reading parameters
+-- name is a String, the name of the parameter
+-- getParam is Scotty.[path|query|form]Param
+-- f 'parses' the raw parameter
+-- def is the default value
+readParam name getParam f def = do
+  p <- getParam name `Scotty.rescue` (\ (_ :: E.SomeException) -> return def)
+  return $ f p
+
+selectedParam getParam = readParam "selected" getParam parsePath "0"
+expandedParam getParam = readParam "expanded" getParam parsePaths "" 
+togglePathParam getParam = readParam "toggle" getParam parsePath ""
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1378,12 +1392,10 @@ app appStateRef = do
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
-    selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
-    expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-    let ix = parsePath selectedParam
-    let expandedPaths = parsePaths expandedParam
+    ix <- selectedParam Scotty.queryParam
+    expandedPaths <- expandedParam Scotty.queryParam 
     case state ^. majorState of
-      Connected socket debuggee mode -> Scotty.html (renderConnectedPage expandedPaths ix socket debuggee mode)
+      Connected socket debuggee mode -> Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee mode
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
@@ -1398,7 +1410,6 @@ app appStateRef = do
                 msocket = F.find (\s -> TL.fromStrict (socketName s) == socketPath) socketList
             case msocket of
               Just socket -> do
-                --liftIO $ putStrLn ("trying to connect to socket: " ++ show (socketName socket))
                 alive <- liftIO $ isSocketAlive (_socketLocation socket)
                 if alive then do
                   debuggee <- liftIO $ 
@@ -1410,19 +1421,15 @@ app appStateRef = do
                             _mode = RunningMode
                           }
                   liftIO $ writeIORef appStateRef newState
-                  selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
-                  expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-                  let ix = parsePath selectedParam
-                  let expandedPaths = parsePaths expandedParam
+                  ix <- selectedParam Scotty.queryParam
+                  expandedPaths <- expandedParam Scotty.queryParam 
                   Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee RunningMode
                 else do
-                  Scotty.html $ "Error: socket not found"
-              Nothing -> Scotty.text "Selected socket not found"
+                  Scotty.html $ renderBadSocketPage
+              Nothing -> Scotty.html $ renderBadSocketPage 
       Connected socket debuggee mode -> do
-        selectedParam <- Scotty.param "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
-        expandedParam <- Scotty.param "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-        let ix = parsePath selectedParam
-        let expandedPaths = parsePaths expandedParam
+        ix <- selectedParam Scotty.queryParam        
+        expandedPaths <- expandedParam Scotty.queryParam 
         Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee mode
   {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
@@ -1483,15 +1490,14 @@ app appStateRef = do
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/"
       _ -> Scotty.redirect "/"
+  {- Adds/removes path from expanded paths parameter -}
   Scotty.post "/toggle" $ do
-    togglePathParam <- Scotty.formParam "toggle" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-    selectedParam <- Scotty.formParam "selected" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "0")
-    expandedParam <- Scotty.formParam "expanded" `Scotty.rescue` (\ (_ :: E.SomeException) -> return "")
-    let ix = parsePath selectedParam
-    let toggleIx = parsePath togglePathParam
-    let expandedPaths = togglePath toggleIx (parsePaths expandedParam)
-    let selectedStr = pack $ List.intercalate "." $ map show ix
-    let expandedStr = pack $ List.intercalate "," $ map (List.intercalate "." . map show) expandedPaths 
+    toggleIx <- togglePathParam Scotty.formParam
+    ix <- selectedParam Scotty.formParam
+    expandedPaths <- expandedParam Scotty.formParam 
+    let newExpandedPaths = togglePath toggleIx expandedPaths
+    let selectedStr = pack $ encodePath ix
+    let expandedStr = pack $ encodePaths newExpandedPaths 
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected socket debuggee mode ->
@@ -1519,8 +1525,6 @@ app appStateRef = do
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
 
---dummyExpandedPaths = [[1],[9],[9,0]]--[[0], [1], [2], [3]]
-
 expandNode :: Debuggee -> Set.Set String -> ClosureDetails -> IO (IOTreeNode ClosureDetails Name)
 expandNode debuggee visited node@(ClosureDetails c _ _) = 
   let ptr = closureShowAddress c
@@ -1534,15 +1538,7 @@ expandNode debuggee visited node@(ClosureDetails c _ _) =
          { _node = node,
            _children = Right expandedChildren
          }
-expandNode debuggee s node = do
-  children <- getChildren debuggee node
-  expandedChildren <- mapM (expandNode debuggee s) children
-  return $ IOTreeNode
-    { _node = node,
-      _children = Right expandedChildren
-    }
-
- 
+expandNode _ _ _ = error "error: closureDetails type not supported"
 
 main :: IO ()
 main = newMain
@@ -1575,7 +1571,3 @@ newMain = do
   let initial = initialAppState eventChan
   appStateRef <- newIORef initial
   Scotty.scotty 3000 (app appStateRef)
-  {-Scotty.scotty 3000 $ 
-    Scotty.get "/" $ do
-      Scotty.html $ mconcat ["<h1> hello there debugger, this is working </h1>"]
-  -}
