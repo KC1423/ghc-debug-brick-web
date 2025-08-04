@@ -1270,7 +1270,7 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    renderIOSummary tree ix renderSummary
+    renderIOSummary tree ix renderSummary (getClosureIncSize Set.empty)
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
@@ -1315,8 +1315,8 @@ renderClosureHtmlRow selectedPath expandedPaths ix state selected lastCtx parent
       a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ renderClosureHtml closureDesc
 
 
-renderSummary :: RowState -> RowCtx -> [RowCtx] -> ClosureDetails -> Html ()
-renderSummary _ _ _ (ClosureDetails c excSize info) = 
+renderSummary :: RowState -> RowCtx -> [RowCtx] -> ClosureDetails -> Int -> Html ()
+renderSummary _ _ _ (ClosureDetails c excSize info) incSize = 
   case _sourceLocation info of
     Just (SourceInformation name cty ty label' modu loc) -> 
       div_ [class_ "closure-summary"] $ do
@@ -1327,10 +1327,25 @@ renderSummary _ _ _ (ClosureDetails c excSize info) =
         li_ $ strong_ "Module: " >> toHtml modu
         li_ $ strong_ "Location: " >> toHtml loc
         li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
+        li_ $ strong_ "Inclusive size: " >> toHtml (show incSize <> "B")
     Nothing -> 
       div_ [class_ "closure-summary"] $ do
         h3_ "Selected closure"
         li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
+        li_ $ strong_ "Inclusive size: " >> toHtml (show incSize <> "B")
+
+getClosureIncSize :: Set.Set String -> IOTreeNode ClosureDetails name -> Int
+getClosureIncSize seen' node = fst (go seen' node)
+  where
+    go :: Set.Set String -> IOTreeNode ClosureDetails name -> (Int, Set.Set String)
+    go seen (IOTreeNode (ClosureDetails c excSize _) (Right csE)) =
+      let ptr = closureShowAddress c
+      in if Set.member ptr seen
+         then (0, seen)
+         else let (cSize, newSeen) = listApply go 0 (Set.insert ptr seen) csE
+              in ((getSize excSize + cSize), newSeen)
+    listApply f res s xs = foldl step (res, s) xs
+      where step (acc, st) x = let (a, st') = f st x in (acc + a, st') 
 
 parsePaths :: String -> [[Int]]
 parsePaths [] = []

@@ -476,15 +476,17 @@ renderIOSummary
   :: (Ord name, Show name)
   => IOTree node name
   -> [Int]
-  -> (RowState -> RowCtx -> [RowCtx] -> node -> Html ())
+  -> (RowState -> RowCtx -> [RowCtx] -> node -> Int -> Html ())
+  -> (IOTreeNode node name -> Int)
   -> Html ()
-renderIOSummary (IOTree _ roots _ _ _) path renderSummary = 
+renderIOSummary (IOTree _ roots _ _ _) path renderSummary getIncSize = 
   div_ [class_ "iotree-container"] $ do
     case findNodeByPath [] roots path of
-      Just (state, rowCtx, parentCtxs, node) ->
-        renderSummary state rowCtx parentCtxs node
+      Just (state, rowCtx, parentCtxs, n@(IOTreeNode node csE)) ->
+        renderSummary state rowCtx parentCtxs node (getIncSize n)
       Nothing -> mempty
-  where findNodeByPath _ [] _ = Nothing
+  where findNodeByPath :: [RowCtx] -> [IOTreeNode node name] -> [Int] -> Maybe (RowState, RowCtx, [RowCtx], IOTreeNode node name)
+        findNodeByPath _ [] _ = Nothing
         findNodeByPath parentCtxs (n@(IOTreeNode node' csE) : rest) path@(i:is) = 
           if i == 0 then
             let rowCtx = if null rest then LastRow else NotLastRow
@@ -493,11 +495,11 @@ renderIOSummary (IOTree _ roots _ _ _) path renderSummary =
                   Right cs -> Expanded (null cs)
             in case csE of
                  Left _ -> if null is
-                           then Just (state, rowCtx, parentCtxs, node')
+                           then Just (state, rowCtx, parentCtxs, n)
                            else Nothing
                  Right cs ->
                    if null is
-                     then Just (state, rowCtx, parentCtxs, node')
+                     then Just (state, rowCtx, parentCtxs, n)
                      else findNodeByPath (rowCtx : parentCtxs) cs is
            else findNodeByPath parentCtxs rest (i-1 : is)
 
