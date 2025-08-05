@@ -24,7 +24,10 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Debug.Trace
+import Data.GraphViz
+import Data.GraphViz.Types.Monadic
+import Data.GraphViz.Types.Generalised (DotGraph)
+import qualified Debug.Trace
 
 import Brick
 import Brick.BChan
@@ -1278,14 +1281,28 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
     renderIOSummary tree ix renderSummary (getClosureIncSize Set.empty)
+    form_ [method_ "post", action_ "/img"] $ do
+      input_ [type_ "hidden", name_ "selected", value_ (pack $ encodePath ix)]
+      input_ [type_ "hidden", name_ "expanded", value_ (pack $ encodePaths expandedPaths)]
+      button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
     renderIOTreeHtml tree ix expandedPaths renderClosureHtmlRow
 
-renderClosureDetailsHtml :: ClosureDetails -> Html ()
-renderClosureDetailsHtml (ClosureDetails closure _excSize info) = undefined
+renderImgPage :: [Int] -> [[Int]] -> TL.Text
+renderImgPage selectedPath expandedPaths =
+  renderText $ do
+    h1_ "Look at this puppy!"
+    body_ $ do
+      let pathStr = pack $ encodePath selectedPath
+          expandedStr = pack $ encodePaths expandedPaths
+      a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ "Return to debuggee"
+      --img_ [src_ "/img/puppy.jpg", alt_ "Puppy", style_ "max-width: 100%; height: auto;"]
+      img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
+      {-object_ [type_ "image/svg+xml", makeAttribute "data" "/graph.svg", style_ "width:100%; height:auto;"] $ do
+        "Your browser does not support SVG" -}
 
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
@@ -1372,8 +1389,27 @@ selectedParam getParam = readParam "selected" getParam parsePath "0"
 expandedParam getParam = readParam "expanded" getParam parsePaths "" 
 togglePathParam getParam = readParam "toggle" getParam parsePath ""
 
+myGraph :: [Int] -> Data.GraphViz.Types.Generalised.DotGraph Int
+myGraph selectedPath = digraph (Str "Example") $ do
+  node 1 [toLabel (("start" <> pack (encodePath selectedPath)) :: Text)]
+  node 2 [toLabel ("end" :: Text)]
+  edge 1 2 []
+
+{-genGraphImage :: FilePath -> IO FilePath
+genGraphImage outPath = do
+  createDirectoryIfMissing True outPath
+  let imgPath = outPath </> "graph.png"
+  _ <- runGraphviz myGraph Png imgPath
+  return imgPath
+-}
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
+  Scotty.get "/img/puppy.jpg" $ Scotty.file "static/img/puppy.jpg"
+  Scotty.get "/graph" $ do
+    Scotty.setHeader "Content-Type" "image/png"
+    Scotty.file "tmp/graph.png"
+
   {- Main page where sockets/snapshots can be selected for debugging -}
   Scotty.get "/" $ do
     state <- liftIO $ readIORef appStateRef
@@ -1503,7 +1539,15 @@ app appStateRef = do
       Connected socket debuggee mode ->
         Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr <> "&expanded=" <> TL.fromStrict expandedStr
       _ -> Scotty.redirect "/"
-
+  Scotty.post "/img" $ do
+    selectedPath <- selectedParam Scotty.formParam
+    expandedPaths <- expandedParam Scotty.formParam 
+    liftIO $ do
+      createDirectoryIfMissing True "tmp"
+      let graph = myGraph selectedPath --buildGraphFromState selectedPath expandedPaths
+      _ <- runGraphviz graph Png "tmp/graph.png"
+      return ()
+    Scotty.html $ renderImgPage selectedPath expandedPaths 
 
 
 
