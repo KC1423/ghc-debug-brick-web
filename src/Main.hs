@@ -27,7 +27,7 @@ import Data.List.Split (splitOn)
 import Data.GraphViz
 import Data.GraphViz.Types.Monadic
 import Data.GraphViz.Types.Generalised (DotGraph)
-import qualified Debug.Trace
+import Debug.Trace
 
 import Brick
 import Brick.BChan
@@ -1281,9 +1281,14 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
     renderIOSummary tree ix renderSummary (getClosureIncSize Set.empty)
+    let subtree = getSubTree tree ix
+    let (nodes', edges) = getClosureVizTree Set.empty [] subtree
+    let nodes = Set.toList nodes'
     form_ [method_ "post", action_ "/img"] $ do
       input_ [type_ "hidden", name_ "selected", value_ (pack $ encodePath ix)]
       input_ [type_ "hidden", name_ "expanded", value_ (pack $ encodePaths expandedPaths)]
+      input_ [type_ "hidden", name_ "viz_nodes", value_ (pack $ encodeNodes nodes)]
+      input_ [type_ "hidden", name_ "viz_edges", value_ (pack $ encodeEdges edges)]
       button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
@@ -1359,6 +1364,29 @@ getClosureIncSize seen' node = fst (go seen' node)
     listApply f res s xs = foldl step (res, s) xs
       where step (acc, st) x = let (a, st') = f st x in (acc + a, st') 
 
+type EdgeList = [(String, String)]
+
+getClosureVizTree :: Set.Set String -> EdgeList -> IOTreeNode ClosureDetails name -> (Set.Set String, EdgeList)
+getClosureVizTree nodes' edges' node = go nodes' edges' node
+  where 
+    go nodes edges (IOTreeNode (ClosureDetails c excSize info) (Right csE)) =
+      let ptr = closureShowAddress c
+      in if Set.member ptr nodes
+         then (nodes, [])
+         else let nodes'' = Set.insert ptr nodes
+                  (nodesFinal, childEdges) = listApply go (nodes'', edges) csE
+                  children = [ closureShowAddress c' | IOTreeNode (ClosureDetails c' _ _) _ <- csE ]
+                  newEdges = map (\ch -> (ptr, ch)) children
+              in (nodesFinal, childEdges ++ newEdges)
+    listApply f (ns, es) xs =
+      foldl (\(nsAcc, esAcc) x ->
+               let (ns', es') = f nsAcc [] x
+               in (ns', esAcc ++ es')) (ns, es) xs
+
+-- if not in nodes, add it in
+-- compute the children recursively, and get a hold of the new sets
+-- for each child, add an edge, including repeats 
+
 parsePaths :: String -> [[Int]]
 parsePaths [] = []
 parsePaths s = map (map read . splitOn ".") (splitOn "," s)
@@ -1366,6 +1394,24 @@ parsePaths s = map (map read . splitOn ".") (splitOn "," s)
 parsePath :: String -> [Int]
 parsePath [] = []
 parsePath s = map read $ splitOn "." s
+
+parseNodes :: String -> [String]
+parseNodes = splitOn ","
+
+parseEdges :: String -> [(String, String)]
+parseEdges [] = []
+parseEdges s = map pair $ splitOn "," s
+  where pair s = case splitOn "->" s of
+                   [a, b] -> (unquote a, unquote b)
+                   _ -> error "Error in reading edge pairs"
+        unquote ('\"':xs) | last xs == '\"' = init xs
+        unquote xs = xs
+
+encodeEdges :: [(String, String)] -> String
+encodeEdges = List.intercalate "," . map (\(a,b) -> show a ++ "->" ++ show b)
+
+encodeNodes :: [String] -> String
+encodeNodes = List.intercalate ","
 
 encodePath :: [Int] -> String
 encodePath = List.intercalate "." . map show
@@ -1388,12 +1434,22 @@ readParam name getParam f def = do
 selectedParam getParam = readParam "selected" getParam parsePath "0"
 expandedParam getParam = readParam "expanded" getParam parsePaths "" 
 togglePathParam getParam = readParam "toggle" getParam parsePath ""
+vizNodesParam getParam = readParam "viz_nodes" getParam parseNodes ""
+vizEdgesParam getParam = readParam "viz_edges" getParam parseEdges ""
 
 myGraph :: [Int] -> Data.GraphViz.Types.Generalised.DotGraph Int
 myGraph selectedPath = digraph (Str "Example") $ do
   node 1 [toLabel (("start" <> pack (encodePath selectedPath)) :: Text)]
   node 2 [toLabel ("end" :: Text)]
   edge 1 2 []
+
+buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
+buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
+  mapM_ (\(n, nid) -> node nid [toLabel (pack n :: Text)]) nids
+  mapM_ (\(a, b) -> case (lookup a nids, lookup b nids) of
+                      (Just x, Just y) -> edge x y []
+                      z -> error ("Error in building closure graph: " ++ a ++ "," ++ b ++ "->" ++ (show z) ++ " -- " ++ show nids)) edges
+  where nids = zipWith (\n i -> (n,i)) nodes [1..]
 
 {-genGraphImage :: FilePath -> IO FilePath
 genGraphImage outPath = do
@@ -1542,9 +1598,12 @@ app appStateRef = do
   Scotty.post "/img" $ do
     selectedPath <- selectedParam Scotty.formParam
     expandedPaths <- expandedParam Scotty.formParam 
+    vizNodes <- vizNodesParam Scotty.formParam
+    vizEdges <- vizEdgesParam Scotty.formParam
     liftIO $ do
       createDirectoryIfMissing True "tmp"
-      let graph = myGraph selectedPath --buildGraphFromState selectedPath expandedPaths
+      --let graph = myGraph selectedPath --buildGraphFromState selectedPath expandedPaths
+      let graph = buildClosureGraph vizNodes vizEdges
       _ <- runGraphviz graph Png "tmp/graph.png"
       return ()
     Scotty.html $ renderImgPage selectedPath expandedPaths 

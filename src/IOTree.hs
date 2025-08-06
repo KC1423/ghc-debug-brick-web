@@ -34,6 +34,7 @@ module IOTree
   , renderIOTreeHtml
   , renderIOSummary
   , IOTreeNode(..)
+  , getSubTree
   ) where
 
 import Lucid
@@ -483,5 +484,20 @@ renderIOSummary (IOTree _ roots _ _ _) path renderSummary getIncSize =
                                                        Left _ -> Nothing
                                                        Right cs -> findNodeByPath cs is
            else findNodeByPath rest (i-1 : is)
+
+getSubTree :: IOTree node name -> [Int] -> IOTreeNode node name
+getSubTree (IOTree _ roots _ _ _) path =
+  case findNodeByPath roots path of
+    Just n@(IOTreeNode node csE) -> n
+    Nothing -> error "Error: non-existent path"
+  where findNodeByPath :: [IOTreeNode node name] -> [Int] -> Maybe (IOTreeNode node name)
+        findNodeByPath [] _ = Nothing
+        findNodeByPath (n@(IOTreeNode node' csE) : rest) path@(i:is) = 
+          if i == 0 then if null is then Just n else case csE of
+                                                       Left _ -> Nothing
+                                                       Right cs -> findNodeByPath cs is
+           else findNodeByPath rest (i-1 : is)
+
+    
 
 data RenderTree a = RenderNode a [RenderTree a]
