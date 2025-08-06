@@ -1304,7 +1304,6 @@ renderImgPage selectedPath expandedPaths =
       let pathStr = pack $ encodePath selectedPath
           expandedStr = pack $ encodePaths expandedPaths
       a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ "Return to debuggee"
-      --img_ [src_ "/img/puppy.jpg", alt_ "Puppy", style_ "max-width: 100%; height: auto;"]
       img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
       {-object_ [type_ "image/svg+xml", makeAttribute "data" "/graph.svg", style_ "width:100%; height:auto;"] $ do
         "Your browser does not support SVG" -}
@@ -1369,13 +1368,15 @@ type EdgeList = [(String, String)]
 getClosureVizTree :: Set.Set String -> EdgeList -> IOTreeNode ClosureDetails name -> (Set.Set String, EdgeList)
 getClosureVizTree nodes' edges' node = go nodes' edges' node
   where 
+    format clo inf = closureShowAddress clo ++ "\n" ++ takeWhile (/=' ') (unquote (show (_pretty inf)))
     go nodes edges (IOTreeNode (ClosureDetails c excSize info) (Right csE)) =
-      let ptr = closureShowAddress c
+      let ptr = format c info
       in if Set.member ptr nodes
          then (nodes, [])
          else let nodes'' = Set.insert ptr nodes
                   (nodesFinal, childEdges) = listApply go (nodes'', edges) csE
-                  children = [ closureShowAddress c' | IOTreeNode (ClosureDetails c' _ _) _ <- csE ]
+                  children = [ format c' i'
+                             | IOTreeNode (ClosureDetails c' _ i') _ <- csE ]
                   newEdges = map (\ch -> (ptr, ch)) children
               in (nodesFinal, childEdges ++ newEdges)
     listApply f (ns, es) xs =
@@ -1396,16 +1397,20 @@ parsePath [] = []
 parsePath s = map read $ splitOn "." s
 
 parseNodes :: String -> [String]
-parseNodes = splitOn ","
+parseNodes = map (filter (/='\r')) . splitOn ","
 
 parseEdges :: String -> [(String, String)]
 parseEdges [] = []
 parseEdges s = map pair $ splitOn "," s
   where pair s = case splitOn "->" s of
-                   [a, b] -> (unquote a, unquote b)
+                   [a, b] -> (fixnewline (unquote a), fixnewline (unquote b))
                    _ -> error "Error in reading edge pairs"
-        unquote ('\"':xs) | last xs == '\"' = init xs
-        unquote xs = xs
+unquote ('\"':xs) | last xs == '\"' = init xs
+unquote xs = xs
+fixnewline = unescape . filter (/='\r')
+  where unescape [] = []
+        unescape ('\\':'n':xs) = '\n':unescape xs
+        unescape (x:xs) = x : unescape xs
 
 encodeEdges :: [(String, String)] -> String
 encodeEdges = List.intercalate "," . map (\(a,b) -> show a ++ "->" ++ show b)
@@ -1451,17 +1456,9 @@ buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
                       z -> error ("Error in building closure graph: " ++ a ++ "," ++ b ++ "->" ++ (show z) ++ " -- " ++ show nids)) edges
   where nids = zipWith (\n i -> (n,i)) nodes [1..]
 
-{-genGraphImage :: FilePath -> IO FilePath
-genGraphImage outPath = do
-  createDirectoryIfMissing True outPath
-  let imgPath = outPath </> "graph.png"
-  _ <- runGraphviz myGraph Png imgPath
-  return imgPath
--}
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
-  Scotty.get "/img/puppy.jpg" $ Scotty.file "static/img/puppy.jpg"
   Scotty.get "/graph" $ do
     Scotty.setHeader "Content-Type" "image/png"
     Scotty.file "tmp/graph.png"
