@@ -1282,8 +1282,8 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
       button_ "Exit"
     renderIOSummary tree ix renderSummary (getClosureIncSize Set.empty)
     form_ [method_ "post", action_ "/img"] $ do
-      input_ [type_ "hidden", name_ "selected", value_ (pack $ encodePath ix)]
-      input_ [type_ "hidden", name_ "expanded", value_ (pack $ encodePaths expandedPaths)]
+      input_ [type_ "hidden", name_ "selected", value_ (encodePath ix)]
+      input_ [type_ "hidden", name_ "expanded", value_ (encodePaths expandedPaths)]
       button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
@@ -1296,12 +1296,14 @@ renderImgPage name selectedPath expandedPaths =
   renderText $ do
     h1_ $ toHtml $ "Visualisation of " ++ name
     body_ $ do
-      let pathStr = pack $ encodePath selectedPath
-          expandedStr = pack $ encodePaths expandedPaths
-      a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ "Return to debuggee"
+      let pathStr = encodePath selectedPath
+          expandedStr = encodePaths expandedPaths
+      div_ $ a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ "Return to debuggee"
+      div_ $ a_ [ href_ "/graph"
+                , download_ "graph.svg"
+                , style_ "display: inline-block; margin-top: 1em;"
+                ] "Download SVG"
       img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
-      {-object_ [type_ "image/svg+xml", makeAttribute "data" "/graph.svg", style_ "width:100%; height:auto;"] $ do
-        "Your browser does not support SVG" -}
 
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
@@ -1313,9 +1315,9 @@ renderClosureHtmlRow selectedPath expandedPaths thisPath expanded selected closu
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
       styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
-      pathStr = pack $ encodePath thisPath
-      selectedStr = pack $ encodePath selectedPath
-      expandedStr = pack $ encodePaths expandedPaths
+      pathStr = encodePath thisPath
+      selectedStr = encodePath selectedPath
+      expandedStr = encodePaths expandedPaths
   in div_ [class_ classStr, styleAttr] $ do
       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
@@ -1395,17 +1397,11 @@ unquote ('\"':xs) | last xs == '\"' = init xs
 unquote xs = xs
 
 
-encodeEdges :: [(String, String)] -> String
-encodeEdges = List.intercalate "," . map (\(a,b) -> show a ++ "->" ++ show b)
+encodePath :: [Int] -> Text
+encodePath = pack . List.intercalate "." . map show
 
-encodeNodes :: [String] -> String
-encodeNodes = List.intercalate ","
-
-encodePath :: [Int] -> String
-encodePath = List.intercalate "." . map show
-
-encodePaths :: [[Int]] -> String
-encodePaths = List.intercalate "," . map encodePath
+encodePaths :: [[Int]] -> Text
+encodePaths = T.intercalate "," . map encodePath
 
 togglePath :: Eq a => [a] -> [[a]] -> [[a]]
 togglePath x xs = if x `elem` xs then filter (/=x) xs else x:xs
@@ -1425,7 +1421,7 @@ togglePathParam getParam = readParam "toggle" getParam parsePath ""
 
 myGraph :: [Int] -> Data.GraphViz.Types.Generalised.DotGraph Int
 myGraph selectedPath = digraph (Str "Example") $ do
-  node 1 [toLabel (("start" <> pack (encodePath selectedPath)) :: Text)]
+  node 1 [toLabel (("start" <> encodePath selectedPath) :: Text)]
   node 2 [toLabel ("end" :: Text)]
   edge 1 2 []
 
@@ -1441,8 +1437,8 @@ buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   Scotty.get "/graph" $ do
-    Scotty.setHeader "Content-Type" "image/png"
-    Scotty.file "tmp/graph.png"
+    Scotty.setHeader "Content-Type" "image/svg+xml"
+    Scotty.file "tmp/graph.svg"
 
   {- Main page where sockets/snapshots can be selected for debugging -}
   Scotty.get "/" $ do
@@ -1566,8 +1562,8 @@ app appStateRef = do
     ix <- selectedParam Scotty.formParam
     expandedPaths <- expandedParam Scotty.formParam 
     let newExpandedPaths = togglePath toggleIx expandedPaths
-    let selectedStr = pack $ encodePath ix
-    let expandedStr = pack $ encodePaths newExpandedPaths 
+    let selectedStr = encodePath ix
+    let expandedStr = encodePaths newExpandedPaths 
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected socket debuggee mode ->
@@ -1589,9 +1585,9 @@ app appStateRef = do
             liftIO $ do
               createDirectoryIfMissing True "tmp"
               let graph = buildClosureGraph vizNodes vizEdges
-              _ <- runGraphviz graph Png "tmp/graph.png"
+              _ <- runGraphviz graph Svg "tmp/graph.svg"
               return ()
-            Scotty.html $ renderImgPage name selectedPath expandedPaths 
+            Scotty.html $ renderImgPage name selectedPath expandedPaths
 
 
 
