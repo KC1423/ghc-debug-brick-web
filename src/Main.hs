@@ -1281,14 +1281,9 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
     renderIOSummary tree ix renderSummary (getClosureIncSize Set.empty)
-    let subtree = getSubTree tree ix
-    let (nodes', edges) = getClosureVizTree Set.empty [] subtree
-    let nodes = Set.toList nodes'
     form_ [method_ "post", action_ "/img"] $ do
       input_ [type_ "hidden", name_ "selected", value_ (pack $ encodePath ix)]
       input_ [type_ "hidden", name_ "expanded", value_ (pack $ encodePaths expandedPaths)]
-      input_ [type_ "hidden", name_ "viz_nodes", value_ (pack $ encodeNodes nodes)]
-      input_ [type_ "hidden", name_ "viz_edges", value_ (pack $ encodeEdges edges)]
       button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
@@ -1296,10 +1291,10 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
         Searched {} -> pack "Search Results"
     renderIOTreeHtml tree ix expandedPaths renderClosureHtmlRow
 
-renderImgPage :: [Int] -> [[Int]] -> TL.Text
-renderImgPage selectedPath expandedPaths =
+renderImgPage :: String -> [Int] -> [[Int]] -> TL.Text
+renderImgPage name selectedPath expandedPaths =
   renderText $ do
-    h1_ "Look at this puppy!"
+    h1_ $ toHtml $ "Visualisation of " ++ name
     body_ $ do
       let pathStr = pack $ encodePath selectedPath
           expandedStr = pack $ encodePaths expandedPaths
@@ -1384,9 +1379,8 @@ getClosureVizTree nodes' edges' node = go nodes' edges' node
                let (ns', es') = f nsAcc [] x
                in (ns', esAcc ++ es')) (ns, es) xs
 
--- if not in nodes, add it in
--- compute the children recursively, and get a hold of the new sets
--- for each child, add an edge, including repeats 
+getNodeName :: IOTreeNode ClosureDetails name -> String
+getNodeName (IOTreeNode (ClosureDetails c excSize info) _) = closureShowAddress c
 
 parsePaths :: String -> [[Int]]
 parsePaths [] = []
@@ -1396,21 +1390,10 @@ parsePath :: String -> [Int]
 parsePath [] = []
 parsePath s = map read $ splitOn "." s
 
-parseNodes :: String -> [String]
-parseNodes = map (filter (/='\r')) . splitOn ","
-
-parseEdges :: String -> [(String, String)]
-parseEdges [] = []
-parseEdges s = map pair $ splitOn "," s
-  where pair s = case splitOn "->" s of
-                   [a, b] -> (fixnewline (unquote a), fixnewline (unquote b))
-                   _ -> error "Error in reading edge pairs"
+unquote :: String -> String
 unquote ('\"':xs) | last xs == '\"' = init xs
 unquote xs = xs
-fixnewline = unescape . filter (/='\r')
-  where unescape [] = []
-        unescape ('\\':'n':xs) = '\n':unescape xs
-        unescape (x:xs) = x : unescape xs
+
 
 encodeEdges :: [(String, String)] -> String
 encodeEdges = List.intercalate "," . map (\(a,b) -> show a ++ "->" ++ show b)
@@ -1439,8 +1422,6 @@ readParam name getParam f def = do
 selectedParam getParam = readParam "selected" getParam parsePath "0"
 expandedParam getParam = readParam "expanded" getParam parsePaths "" 
 togglePathParam getParam = readParam "toggle" getParam parsePath ""
-vizNodesParam getParam = readParam "viz_nodes" getParam parseNodes ""
-vizEdgesParam getParam = readParam "viz_edges" getParam parseEdges ""
 
 myGraph :: [Int] -> Data.GraphViz.Types.Generalised.DotGraph Int
 myGraph selectedPath = digraph (Str "Example") $ do
@@ -1593,17 +1574,24 @@ app appStateRef = do
         Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr <> "&expanded=" <> TL.fromStrict expandedStr
       _ -> Scotty.redirect "/"
   Scotty.post "/img" $ do
-    selectedPath <- selectedParam Scotty.formParam
-    expandedPaths <- expandedParam Scotty.formParam 
-    vizNodes <- vizNodesParam Scotty.formParam
-    vizEdges <- vizEdgesParam Scotty.formParam
-    liftIO $ do
-      createDirectoryIfMissing True "tmp"
-      --let graph = myGraph selectedPath --buildGraphFromState selectedPath expandedPaths
-      let graph = buildClosureGraph vizNodes vizEdges
-      _ <- runGraphviz graph Png "tmp/graph.png"
-      return ()
-    Scotty.html $ renderImgPage selectedPath expandedPaths 
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        case mode of
+          PausedMode os -> do
+            selectedPath <- selectedParam Scotty.formParam
+            expandedPaths <- expandedParam Scotty.formParam 
+            let tree = _treeSavedAndGCRoots os
+            let subtree = getSubTree tree selectedPath
+            let name = getNodeName subtree
+            let (nodes', vizEdges) = getClosureVizTree Set.empty [] subtree
+            let vizNodes = Set.toList nodes'
+            liftIO $ do
+              createDirectoryIfMissing True "tmp"
+              let graph = buildClosureGraph vizNodes vizEdges
+              _ <- runGraphviz graph Png "tmp/graph.png"
+              return ()
+            Scotty.html $ renderImgPage name selectedPath expandedPaths 
 
 
 
