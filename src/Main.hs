@@ -1234,6 +1234,7 @@ myAppHandleEvent brickEvent = do
           return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
+
 {- New code here -}
 
 renderSocketSelectionPage :: SetupKind -> [SocketInfo] -> TL.Text
@@ -1298,56 +1299,30 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
 renderImgPage :: String -> [Int] -> [[Int]] -> TL.Text
 renderImgPage name selectedPath expandedPaths =
   renderText $ do
-    h1_ $ toHtml $ "Visualisation of " ++ name
+    h1_ $ toHtml $ "Visualisation of " ++ name ++ " (temporarily unavailable)"
     body_ $ do
       let pathStr = encodePath selectedPath
           expandedStr = encodePaths expandedPaths
       div_ $ a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ "Return to debuggee"
-      div_ $ a_ [ href_ "/graph"
+      -- UNCOMMENT THIS WHEN ALL CLOSUREDETAILS ARE PATTERN MATCHED
+      {-div_ $ a_ [ href_ "/graph"
                 , download_ "graph.svg"
                 , style_ "display: inline-block; margin-top: 1em;"
                 ] "Download SVG"
-      img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
+      img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]-}
 
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ _labelInParent info <> " | " <> pack (closureShowAddress closure) <> " | " <> _pretty info 
 renderClosureHtml (InfoDetails info) = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ _labelInParent info <> " | " <> _pretty info 
-{-
-renderInlineClosureDesc :: ClosureDetails -> [Widget n]
-renderInlineClosureDesc (LabelNode t) = [txtLabel t]
-renderInlineClosureDesc (InfoDetails info') =
-  [txtLabel (_labelInParent info'), vSpace, txt (_pretty info')]
-renderInlineClosureDesc (CCSDetails clabel _cptr ccspayload) =
-  [ txtLabel clabel, vSpace, txt (prettyCCS ccspayload)]
-renderInlineClosureDesc (CCDetails clabel cc) =
-  [ txtLabel clabel, vSpace, txt (prettyCC cc)]
-renderInlineClosureDesc closureDesc@(ClosureDetails{}) =
-                    [ txtLabel (_labelInParent (_info closureDesc))
-                    , colorBar
-                    , txt $  pack (closureShowAddress (_closure closureDesc))
-                    , vSpace
-                    , txtWrap $ _pretty (_info closureDesc)
-                    ]
-  where
-    colorBar =
-      case colorId of
-        Just {} -> padLeftRight 1 (colorEra (txt " "))
-        Nothing -> vSpace
+renderClosureHtml (LabelNode t) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ t
+renderClosureHtml (CCSDetails clabel _cptr ccspayload) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ clabel <> " | " <> prettyCCS ccspayload 
+renderClosureHtml (CCDetails clabel cc) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ clabel <> " | " <> prettyCC cc
 
-    colorId = _profHeaderInfo $ _info closureDesc
-    colorEra = case colorId of
-      Just (Debug.EraWord i) -> modifyDefAttr (flip Vty.withBackColor (era_colors !! (1 + (fromIntegral $ abs i) `mod` (length era_colors - 1))))
-      Just (Debug.LDVWord {state}) -> case state of
-                                        -- Used
-                                        True -> modifyDefAttr (flip Vty.withBackColor Vty.green)
-                                        -- Unused
-                                        False -> id
-      _ -> id
--}
-
- 
 
 renderClosureHtmlRow :: [Int] -> [[Int]] -> [Int] -> Bool -> Bool -> ClosureDetails -> Html ()
 renderClosureHtmlRow selectedPath expandedPaths thisPath expanded selected closureDesc =
@@ -1368,24 +1343,70 @@ renderClosureHtmlRow selectedPath expandedPaths thisPath expanded selected closu
       a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ renderClosureHtml closureDesc
 
 
+renderSourceInfoSummary :: SourceInformation -> Html ()
+renderSourceInfoSummary (SourceInformation name cty ty label' modu loc) = do 
+  li_ $ strong_ "Name: " >> toHtml name
+  li_ $ strong_ "Closure type: " >> toHtml (show cty)
+  li_ $ strong_ "Label: " >> toHtml label'
+  li_ $ strong_ "Module: " >> toHtml modu
+  li_ $ strong_ "Location: " >> toHtml loc
+
+
+renderInfoSummary :: InfoInfo -> Html ()
+renderInfoSummary info = do 
+  maybe mempty renderSourceInfoSummary (_sourceLocation info)
+  case _profHeaderInfo info of
+    Just x ->
+      let label = case x of 
+                    Debug.RetainerHeader{} -> "Retainer info: "
+                    Debug.LDVWord{} -> "LDV info: "
+                    Debug.EraWord{} -> "Era: "
+                    Debug.OtherHeader{} -> "Other: "
+      in li_ $ strong_ label >> toHtml (renderProfHeader x)
+    Nothing -> mempty
+  where renderProfHeader pinfo@(Debug.RetainerHeader {}) = show pinfo
+        renderProfHeader (Debug.LDVWord {state, creationTime, lastUseTime}) = 
+          (if state then "✓" else "✘") ++ 
+          " created: " ++ 
+          show creationTime ++ 
+          (if state then " last used: " <> show lastUseTime else "")
+        renderProfHeader (Debug.EraWord era) = show era
+        renderProfHeader (Debug.OtherHeader other) = "Not supported: " ++ show other
+
+renderCC :: CCPayload -> Html ()
+renderCC Debug.CCPayload{..} = do
+  li_ $ strong_ "Label: " >> toHtml ccLabel
+  li_ $ strong_ "CC ID: " >> toHtml (show ccID)
+  li_ $ strong_ "Module: " >> toHtml ccMod
+  li_ $ strong_ "Location: " >> toHtml ccLoc
+  li_ $ strong_ "Allocation: " >> toHtml (show ccMemAlloc)
+  li_ $ strong_ "Time ticks: " >> toHtml (show ccTimeTicks)
+  li_ $ strong_ "Is CAF: " >> toHtml (show ccIsCaf) 
+
 renderSummary :: ClosureDetails -> Int -> Html ()
 renderSummary (ClosureDetails c excSize info) incSize = 
-  case _sourceLocation info of
-    Just (SourceInformation name cty ty label' modu loc) -> 
-      div_ [class_ "closure-summary"] $ do
-        h3_ "Selected closure"
-        li_ $ strong_ "Name: " >> toHtml name
-        li_ $ strong_ "Closure type: " >> toHtml (show cty)
-        li_ $ strong_ "Label: " >> toHtml label'
-        li_ $ strong_ "Module: " >> toHtml modu
-        li_ $ strong_ "Location: " >> toHtml loc
-        li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
-        li_ $ strong_ "Inclusive size (temporarily unavailable): " >> toHtml (show incSize <> "B")
-    Nothing -> 
-      div_ [class_ "closure-summary"] $ do
-        h3_ "Selected closure"
-        li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
-        li_ $ strong_ "Inclusive size (temporarily unavailable): " >> toHtml (show incSize <> "B")
+  div_ [class_ "closure-summary"] $ do
+    h3_ "Selected closure"
+    renderInfoSummary info
+    li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
+    li_ $ strong_ "Inclusive size (temporarily unavailable): " >> toHtml (show incSize <> "B")
+renderSummary (LabelNode n) _ =
+  div_ [class_ "closure-summary"] $ do
+    h3_ "Selected closure"
+    li_ $ toHtml n
+renderSummary (InfoDetails info) _ = 
+  div_ [class_ "closure-summary"] $ do
+    h3_ "Selected closure"
+    renderInfoSummary info
+renderSummary (CCSDetails _ _ptr (Debug.CCSPayload{..})) _ =
+  div_ [class_ "closure-summary"] $ do
+    h3_ "Selected closure"
+    li_ $ strong_ "ID: " >> toHtml (show ccsID) 
+    renderCC ccsCc
+renderSummary (CCDetails _ c) _ = 
+  div_ [class_ "closure-summary"] $ do
+    h3_ "Selected closure"
+    renderCC c
 
 getClosureIncSize :: Set.Set String -> IOTreeNode ClosureDetails name -> Int
 getClosureIncSize seen' node = fst (go seen' node)
@@ -1624,13 +1645,14 @@ app appStateRef = do
             let tree = _treeSavedAndGCRoots os
             let subtree = getSubTree tree selectedPath
             let name = getNodeName subtree
-            let (nodes', vizEdges) = getClosureVizTree Set.empty [] subtree
+            -- UNCOMMENT THIS WHEN ALL CLOSUREDETAILS ARE PATTERN MATCHED
+            {-let (nodes', vizEdges) = getClosureVizTree Set.empty [] subtree
             let vizNodes = Set.toList nodes'
             liftIO $ do
               createDirectoryIfMissing True "tmp"
               let graph = buildClosureGraph vizNodes vizEdges
               _ <- runGraphviz graph Svg "tmp/graph.svg"
-              return ()
+              return ()-}
             Scotty.html $ renderImgPage name selectedPath expandedPaths
 
 
@@ -1642,15 +1664,6 @@ app appStateRef = do
           raw_saved <- map ("Saved Object",) <$> GD.savedClosures debuggee'
           savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
           --expandedRoots <- mapM (expandNode debuggee' Set.empty) (savedClosures' {-++ rootClosures'-})
-          {-let roots = savedClosures'-- ++ rootClosures'
-          let resTree = IOTree { 
-              _name = Connected_Paused_ClosureTree
-            , _roots = IOTreeNode roots (Right [])
-            , _getChildren = const (return [])
-            , _renderRow = undefined
-            , _selection = []
-            }-}
-          --return $ ( resTree
           return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
