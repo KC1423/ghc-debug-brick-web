@@ -1280,7 +1280,11 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    renderIOSummary tree ix renderSummary (getClosureIncSize Set.empty)
+    -- here 'inclusive size' is ingrained, and requires a fully expanded subtree
+    -- the problem here is that very large objects (e.g. GC roots) shouldn't be fully expanded
+    -- I think maybe capping it could be a good idea
+    -- but right now this is just here so it compiles
+    renderIOSummary tree ix renderSummary (const 0)--getClosureIncSize Set.empty)
     form_ [method_ "post", action_ "/img"] $ do
       input_ [type_ "hidden", name_ "selected", value_ (encodePath ix)]
       input_ [type_ "hidden", name_ "expanded", value_ (encodePaths expandedPaths)]
@@ -1308,6 +1312,42 @@ renderImgPage name selectedPath expandedPaths =
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ _labelInParent info <> " | " <> pack (closureShowAddress closure) <> " | " <> _pretty info 
+renderClosureHtml (InfoDetails info) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ _labelInParent info <> " | " <> _pretty info 
+{-
+renderInlineClosureDesc :: ClosureDetails -> [Widget n]
+renderInlineClosureDesc (LabelNode t) = [txtLabel t]
+renderInlineClosureDesc (InfoDetails info') =
+  [txtLabel (_labelInParent info'), vSpace, txt (_pretty info')]
+renderInlineClosureDesc (CCSDetails clabel _cptr ccspayload) =
+  [ txtLabel clabel, vSpace, txt (prettyCCS ccspayload)]
+renderInlineClosureDesc (CCDetails clabel cc) =
+  [ txtLabel clabel, vSpace, txt (prettyCC cc)]
+renderInlineClosureDesc closureDesc@(ClosureDetails{}) =
+                    [ txtLabel (_labelInParent (_info closureDesc))
+                    , colorBar
+                    , txt $  pack (closureShowAddress (_closure closureDesc))
+                    , vSpace
+                    , txtWrap $ _pretty (_info closureDesc)
+                    ]
+  where
+    colorBar =
+      case colorId of
+        Just {} -> padLeftRight 1 (colorEra (txt " "))
+        Nothing -> vSpace
+
+    colorId = _profHeaderInfo $ _info closureDesc
+    colorEra = case colorId of
+      Just (Debug.EraWord i) -> modifyDefAttr (flip Vty.withBackColor (era_colors !! (1 + (fromIntegral $ abs i) `mod` (length era_colors - 1))))
+      Just (Debug.LDVWord {state}) -> case state of
+                                        -- Used
+                                        True -> modifyDefAttr (flip Vty.withBackColor Vty.green)
+                                        -- Unused
+                                        False -> id
+      _ -> id
+-}
+
+ 
 
 renderClosureHtmlRow :: [Int] -> [[Int]] -> [Int] -> Bool -> Bool -> ClosureDetails -> Html ()
 renderClosureHtmlRow selectedPath expandedPaths thisPath expanded selected closureDesc =
@@ -1340,12 +1380,12 @@ renderSummary (ClosureDetails c excSize info) incSize =
         li_ $ strong_ "Module: " >> toHtml modu
         li_ $ strong_ "Location: " >> toHtml loc
         li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
-        li_ $ strong_ "Inclusive size: " >> toHtml (show incSize <> "B")
+        li_ $ strong_ "Inclusive size (temporarily unavailable): " >> toHtml (show incSize <> "B")
     Nothing -> 
       div_ [class_ "closure-summary"] $ do
         h3_ "Selected closure"
         li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
-        li_ $ strong_ "Inclusive size: " >> toHtml (show incSize <> "B")
+        li_ $ strong_ "Inclusive size (temporarily unavailable): " >> toHtml (show incSize <> "B")
 
 getClosureIncSize :: Set.Set String -> IOTreeNode ClosureDetails name -> Int
 getClosureIncSize seen' node = fst (go seen' node)
@@ -1566,7 +1606,11 @@ app appStateRef = do
     let expandedStr = encodePaths newExpandedPaths 
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected socket debuggee mode ->
+      Connected socket debuggee (PausedMode os) -> do
+        let tree = _treeSavedAndGCRoots os
+        newTree <- liftIO $ toggleTreeByPath tree toggleIx
+        let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
+        liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr <> "&expanded=" <> TL.fromStrict expandedStr
       _ -> Scotty.redirect "/"
   Scotty.post "/img" $ do
@@ -1597,15 +1641,17 @@ app appStateRef = do
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
           raw_saved <- map ("Saved Object",) <$> GD.savedClosures debuggee'
           savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
-          expandedRoots <- mapM (expandNode debuggee' Set.empty) (savedClosures' {-++ rootClosures'-})
+          --expandedRoots <- mapM (expandNode debuggee' Set.empty) (savedClosures' {-++ rootClosures'-})
+          {-let roots = savedClosures'-- ++ rootClosures'
           let resTree = IOTree { 
               _name = Connected_Paused_ClosureTree
-            , _roots = expandedRoots
+            , _roots = IOTreeNode roots (Right [])
             , _getChildren = const (return [])
             , _renderRow = undefined
             , _selection = []
-            }
-          return $ ( resTree
+            }-}
+          --return $ ( resTree
+          return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
 

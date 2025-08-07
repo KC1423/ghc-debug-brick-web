@@ -35,9 +35,11 @@ module IOTree
   , renderIOSummary
   , IOTreeNode(..)
   , getSubTree
+  , toggleTreeByPath
   ) where
 
 import Lucid
+import Debug.Trace
 
 import           Brick
 import           Control.Applicative
@@ -498,6 +500,31 @@ getSubTree (IOTree _ roots _ _ _) path =
                                                        Right cs -> findNodeByPath cs is
            else findNodeByPath rest (i-1 : is)
 
-    
+
+toggleTreeByPath :: IOTree node name -> [Int] -> IO (IOTree node name)
+toggleTreeByPath (IOTree a roots b c d) path = do
+  newRoots <- toggleNodeByPath roots path
+  return $ IOTree a newRoots b c d
+
+toggleNodeByPath :: [IOTreeNode node name] -> [Int] -> IO [IOTreeNode node name]
+toggleNodeByPath [] _ = return []
+toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
+  if i == 0 then if null is then case csE of
+                                   Left getChildren -> do
+                                     cs <- getChildren
+                                     return $ IOTreeNode node' (Right cs) : rest                
+                                   Right cs -> return $ IOTreeNode node' (Left (return cs)) : rest
+                            else case csE of
+                                   Left getChildren -> do
+                                     csE' <- getChildren
+                                     ecsE' <- toggleNodeByPath csE' is
+                                     return $ IOTreeNode node' (Right ecsE') : rest
+                                   Right cs -> do
+                                     ecs <- toggleNodeByPath cs is
+                                     return $ IOTreeNode node' (Right ecs) : rest
+            else do
+               rest' <- toggleNodeByPath rest (i-1 : is)
+               return $ n : rest'
+ 
 
 data RenderTree a = RenderNode a [RenderTree a]
