@@ -36,10 +36,13 @@ module IOTree
   , IOTreeNode(..)
   , getSubTree
   , toggleTreeByPath
+  , expandNodeWithCap
+  , expandNodeSafe
   ) where
 
 import Lucid
 import Debug.Trace
+import qualified Data.Set as Set
 
 import           Brick
 import           Control.Applicative
@@ -470,22 +473,12 @@ renderIOSummary
   :: (Ord name, Show name)
   => IOTree node name
   -> [Int]
-  -> (node -> Int -> Html ())
-  -> (IOTreeNode node name -> Int)
+  -> (node -> Html ())
   -> Html ()
-renderIOSummary (IOTree _ roots _ _ _) path renderSummary getIncSize = 
+renderIOSummary tree path renderSummary = 
   div_ [class_ "iotree-container"] $ do
-    case findNodeByPath roots path of
-      Just n@(IOTreeNode node csE) ->
-        renderSummary node (getIncSize n)
-      Nothing -> mempty
-  where findNodeByPath :: [IOTreeNode node name] -> [Int] -> Maybe (IOTreeNode node name)
-        findNodeByPath [] _ = Nothing
-        findNodeByPath (n@(IOTreeNode node' csE) : rest) path@(i:is) = 
-          if i == 0 then if null is then Just n else case csE of
-                                                       Left _ -> Nothing
-                                                       Right cs -> findNodeByPath cs is
-           else findNodeByPath rest (i-1 : is)
+    let (IOTreeNode node _) = getSubTree tree path
+    renderSummary node
 
 getSubTree :: IOTree node name -> [Int] -> IOTreeNode node name
 getSubTree (IOTree _ roots _ _ _) path =
@@ -513,7 +506,7 @@ toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
                                    Left getChildren -> do
                                      cs <- getChildren
                                      return $ IOTreeNode node' (Right cs) : rest                
-                                   Right cs -> return $ IOTreeNode node' (Left (return cs)) : rest
+                                   cs -> return $ n : rest
                             else case csE of
                                    Left getChildren -> do
                                      csE' <- getChildren
@@ -526,5 +519,33 @@ toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
                rest' <- toggleNodeByPath rest (i-1 : is)
                return $ n : rest'
  
+expandNodeSafe :: IOTreeNode node name -> (node -> String) -> IO (IOTreeNode node name, Bool)
+expandNodeSafe = expandNodeWithCap 100 --10 --1000 --25000
+
+expandNodeWithCap :: Int -> IOTreeNode node name -> (node -> String) -> IO (IOTreeNode node name, Bool)
+expandNodeWithCap cap n format = do
+  (node, nodes) <- go Set.empty n
+  return (node, Set.size nodes == cap)
+  where 
+    go seen n@(IOTreeNode node csE)
+      | cap == Set.size seen = return (n, seen)
+      | otherwise = let ptr = format node
+                    in if Set.member ptr seen
+                       then return (n, seen) 
+                       else case csE of
+                         Left getChildren -> do
+                           cs <- getChildren
+                           (newCs', seen') <- processChildren (Set.insert ptr seen) cs
+                           return (IOTreeNode node (Right newCs'), seen')
+                         Right cs -> do
+                           (newCs', seen') <- processChildren (Set.insert ptr seen) cs
+                           return (IOTreeNode node (Right newCs'), seen')
+    processChildren seen [] = return ([], seen)
+    processChildren seen (c:cs)
+      | cap == Set.size seen = return (c:cs, seen)
+      | otherwise = do
+          (c', seen') <- go seen c
+          (cs', seen'') <- processChildren seen' cs
+          return (c':cs', seen'')
 
 data RenderTree a = RenderNode a [RenderTree a]
