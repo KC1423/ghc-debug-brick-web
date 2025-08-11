@@ -73,7 +73,7 @@ import Data.Time.Format
 import Data.Time.Clock
 import qualified Numeric
 
-
+-- STATUS: Done
 drawSetup :: Text -> Text -> GenericList Name Seq.Seq SocketInfo -> Widget Name
 drawSetup herald other_herald vals =
       let nKnownDebuggees = Seq.length $ (vals ^. listElementsL)
@@ -93,10 +93,12 @@ drawSetup herald other_herald vals =
         , vLimit 1 $ withAttr menuAttr $ hBox [txt $ "(ESC): exit | (TAB): toggle " <> other_herald <> " view", fill ' ']
         ]
 
+-- STATUS: Design
 mainBorder :: Text -> Widget a -> Widget a
 mainBorder title w = -- borderWithLabel (txt title) . padAll 1
   vLimit 1 (withAttr menuAttr $ hCenter $ fill ' ' <+> txt title <+> fill ' ') <=> w
 
+-- STATUS: Incomplete
 myAppDraw :: AppState -> [Widget Name]
 myAppDraw (AppState majorState' _) =
     case majorState' of
@@ -203,6 +205,7 @@ myAppDraw (AppState majorState' _) =
       key = maybe mempty renderKey k
       padding = (actual_width - T.length desc - T.length key)
 
+-- STATUS: Done
 renderInfoInfo :: InfoInfo -> [Widget Name]
 renderInfoInfo info' =
   maybe [] renderSourceInformation (_sourceLocation info')
@@ -232,6 +235,7 @@ renderInfoInfo info' =
         Debug.EraWord era -> pack (show era)
         Debug.OtherHeader other -> "Not supported: " <> pack (show other)
 
+-- STATUS: Done
 renderSourceInformation :: SourceInformation -> [Widget Name]
 renderSourceInformation (SourceInformation name cty ty label' modu loc) =
     [ labelled "Name" $ vLimit 1 (str name)
@@ -242,13 +246,16 @@ renderSourceInformation (SourceInformation name cty ty label' modu loc) =
     , labelled "Location" $ vLimit 1 (str loc)
     ]
 
+-- STATUS: Design
 labelled :: Text -> Widget Name -> Widget Name
 labelled = labelled' 20
 
+-- STATUS: Design
 labelled' :: Int -> Text -> Widget Name -> Widget Name
 labelled' leftSize lbl w =
   hLimit leftSize  (txtLabel lbl <+> vLimit 1 (fill ' ')) <+> w <+> vLimit 1 (fill ' ')
 
+-- STATUS: Incomplete (not started)
 renderUIFilter :: UIFilter -> Widget Name
 renderUIFilter (UIAddressFilter invert x)     = labelled (bool "" "!" invert <> "Closure address") (str (show x))
 renderUIFilter (UIInfoAddressFilter invert x) = labelled (bool "" "!" invert <> "Info table address") (str (show x))
@@ -259,7 +266,7 @@ renderUIFilter (UISizeFilter invert x)        = labelled (bool "" "!" invert <> 
 renderUIFilter (UIClosureTypeFilter invert x) = labelled (bool "" "!" invert <> "Closure type") (str (show x))
 renderUIFilter (UICcId invert x)              = labelled (bool "" "!" invert <> "CC Id") (str (show x))
 
-
+-- STATUS: Done
 renderClosureDetails :: ClosureDetails -> Widget Name
 renderClosureDetails (cd@(ClosureDetails {})) =
   vLimit 8 $
@@ -278,6 +285,7 @@ renderClosureDetails (CCSDetails _ _ptr (Debug.CCSPayload{..})) = vLimit 8 $ vBo
   ] ++ renderCCPayload ccsCc
 renderClosureDetails (CCDetails _ c) = vLimit 8 $ vBox $ renderCCPayload c
 
+-- STATUS: Done
 renderCCPayload :: CCPayload -> [Widget Name]
 renderCCPayload Debug.CCPayload{..} =
   [ labelled "Label" $ vLimit 1 (str ccLabel)
@@ -289,12 +297,13 @@ renderCCPayload Debug.CCPayload{..} =
   , labelled "Is CAF" $ vLimit 1 (str $ show ccIsCaf)
   ]
 
+-- STATUS: Incomplete (unsure)
 renderBytes :: Real a => a -> Widget n
 renderBytes n =
   str (getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes)))
 
 
-
+-- STATUS: Incomplete (not started)
 footer :: Int -> Maybe Int -> FooterMode -> Widget Name
 footer n m fmode = vLimit 1 $
  case fmode of
@@ -304,14 +313,17 @@ footer n m fmode = vLimit 1 $
                                                (show n <> " items/" <> maybe "∞" show m <> " max")]
    FooterInput _im form -> renderForm form
 
+-- STATUS: Incomplete (might be design)
 footerInput :: FooterInputMode -> FooterMode
 footerInput im =
   FooterInput im (footerInputForm im)
 
+-- STATUS: Incomplete (might be design)
 footerInputForm :: FooterInputMode -> Form Text e Name
 footerInputForm im =
   newForm [(\w -> txtLabel (formatFooterMode im) <+> forceAttr inputAttr w) @@= editTextField id Footer (Just 1)] ""
 
+-- STATUS: Done (in use)
 updateListFrom :: MonadIO m =>
                         IO FilePath
                         -> GenericList n Seq.Seq SocketInfo
@@ -338,7 +350,7 @@ updateListFrom dirIO llist = liftIO $ do
                       (newSelection <|> (if Prelude.null debuggeeSockets then Nothing else Just 0))
                       llist
 
-
+-- STATUS: Incomplete (unsure, is this actually used?)
 getChildren :: Debuggee -> ClosureDetails
             -> IO [ClosureDetails]
 getChildren _ LabelNode{} = return []
@@ -353,6 +365,7 @@ getChildren d (CCSDetails _ _ cp) = do
   mapM (\(lbl, cc) -> getClosureDetails d (pack (show lbl)) cc) references
 
 
+-- STATUS: Incomplete (unsure)
 fillListItem :: Debuggee
              -> ListItem CCSPtr SrtCont PayloadCont ConstrDescCont StackCont ClosurePtr
              -> IO (ListItem CCSPtr SrtCont PayloadCont ConstrDesc StackCont ClosurePtr)
@@ -362,6 +375,7 @@ fillListItem _ ListData = return ListData
 fillListItem _ (ListCCS c1 c2) = return $ ListCCS c1 c2
 fillListItem _ (ListCC c1) = return $ ListCC c1
 
+-- STATUS: Complete (in use)
 mkIOTree :: Debuggee
          -> [a]
          -> (Debuggee -> a -> IO [a])
@@ -386,12 +400,15 @@ mkIOTree debuggee' cs getChildrenGen renderNode sort = ioTree Connected_Paused_C
             vdecorate state ctx depth body -- body (T.concat context)
         )
 
+-- STATUS: Design
 era_colors :: [Vty.Color]
 era_colors = [Vty.Color240 n | n <- [17..230]]
 
+-- STATUS: Design
 grey :: Vty.Color
 grey = Vty.rgbColor (158 :: Int) 158 158
 
+-- STATUS: Design
 -- | Draw the tree structure around the row item. Inspired by the
 -- 'border' functions in brick.
 --
@@ -447,6 +464,7 @@ vdecorate state ctx depth body =
       vLimit (bodyResult ^. imageL . to Vty.imageHeight) $
       total
 
+-- STATUS: Design (unsure)
 vreplicate :: Text -> Widget n
 vreplicate t =
   Widget Fixed Greedy $ do
@@ -465,6 +483,7 @@ vreplicate t =
       render (hLimit (c ^. availWidthL - (length depth * 2 + 4)) $ vLimit (c ^. availHeightL) $ body)
 -}
 
+-- STATUS: Done
 renderInlineClosureDesc :: ClosureDetails -> [Widget n]
 renderInlineClosureDesc (LabelNode t) = [txtLabel t]
 renderInlineClosureDesc (InfoDetails info') =
@@ -496,13 +515,16 @@ renderInlineClosureDesc closureDesc@(ClosureDetails{}) =
                                         False -> id
       _ -> id
 
+-- STATUS: Done
 prettyCCS :: GenCCSPayload CCSPtr CCPayload -> Text
 prettyCCS Debug.CCSPayload{ccsCc = cc} = prettyCC cc
 
+-- STATUS: Done
 prettyCC :: CCPayload -> Text
 prettyCC Debug.CCPayload{..} =
   T.pack ccLabel <> "   " <> T.pack ccMod <> "   " <> T.pack ccLoc
 
+-- STATUS: Incomplete (unsure, possibly in use)
 completeClosureDetails :: Debuggee -> (Text, DebugClosure CCSPtr SrtCont PayloadCont ConstrDescCont StackCont ClosurePtr)
                                             -> IO ClosureDetails
 
@@ -510,7 +532,7 @@ completeClosureDetails dbg (label', clos)  =
   getClosureDetails dbg label' . ListFullClosure  =<< fillConstrDesc dbg clos
 
 
-
+-- STATUS: Incomplete (unsure)
 getClosureDetails :: Debuggee
                             -> Text
                             -> ListItem CCSPtr SrtCont PayloadCont ConstrDesc StackCont ClosurePtr
@@ -540,6 +562,7 @@ getClosureDetails debuggee' label' (ListFullClosure c) = do
     , _excSize = excSize'
     }
 
+-- STATUS: Incomplete (unsure)
 getInfoInfo :: Debuggee -> Text -> InfoTablePtr -> IO InfoInfo
 getInfoInfo debuggee' label' infoPtr = do
 
@@ -557,8 +580,8 @@ getInfoInfo debuggee' label' infoPtr = do
       }
 
 
+-- STATUS: Incomplete
 -- Event handling when the main window has focus
-
 handleMain :: Debuggee -> Handler Event OperationalState
 handleMain dbg e = do
   os <- get
@@ -627,6 +650,7 @@ handleMain dbg e = do
           _ -> handleMainWindowEvent dbg (() <$ e)
     _ -> return ()
 
+-- STATUS: Incomplete
 commandPickerMode :: OverlayMode
 commandPickerMode =
   CommandPicker
@@ -634,6 +658,7 @@ commandPickerMode =
     (list CommandPicker_List commandList 1)
     commandList
 
+-- STATUS: Done (unsure, in use)
 savedAndGCRoots :: TreeMode
 savedAndGCRoots = SavedAndGCRoots renderClosureDetails
 
@@ -641,12 +666,15 @@ savedAndGCRoots = SavedAndGCRoots renderClosureDetails
 -- Commands and Shortcut constants
 -- ----------------------------------------------------------------------------
 
+-- STATUS: Incomplete
 invertFilterEvent :: Vty.Event
 invertFilterEvent = Vty.EvKey (KChar 'g') [Vty.MCtrl]
 
+-- STATUS: Incomplete
 isInvertFilterEvent :: Vty.Event -> Bool
 isInvertFilterEvent = (invertFilterEvent ==)
 
+-- STATUS: Incomplete
 -- All the commands which we support, these show up in keybindings and also the command picker
 commandList :: Seq.Seq Command
 commandList =
@@ -694,6 +722,7 @@ commandList =
 
     withCtrlKey char = Vty.EvKey (KChar char) [Vty.MCtrl]
 
+-- STATUS: Incomplete
 findCommand :: Vty.Event -> Maybe Command
 findCommand event = do
   i <- Seq.findIndexL (\cmd -> commandKey cmd == Just event) commandList
@@ -704,6 +733,7 @@ findCommand event = do
 -- Window Management
 -- ----------------------------------------------------------------------------
 
+-- STATUS: Incomplete
 handleMainWindowEvent :: Debuggee
                       -> Handler () OperationalState
 handleMainWindowEvent dbg brickEvent = do
@@ -734,6 +764,7 @@ handleMainWindowEvent dbg brickEvent = do
 
         _ -> return ()
 
+-- STATUS: Incomplete
 inputFooterHandler :: Debuggee
                    -> FooterInputMode
                    -> Form Text () Name
@@ -751,6 +782,7 @@ inputFooterHandler dbg m form _k re@(VtyEvent e) =
           zoom (lens (const form) (\ os form' -> set footerMode (FooterInput m form') os)) (handleFormEvent re)
 inputFooterHandler _ _ _ k re = k re
 
+-- STATUS: Incomplete
 stringsAction :: Debuggee -> EventM n OperationalState ()
 stringsAction dbg = do
   outside_os <- get
@@ -788,11 +820,12 @@ stringsAction dbg = do
 data ArrWordsLine k = CountLine k Int Int | FieldLine ClosureDetails
 
 
-
+-- STATUS: Incomplete
 renderArrWordsLines :: Show a => ArrWordsLine a -> [Widget n]
 renderArrWordsLines (CountLine k l n) = [strLabel (show n), vSpace, renderBytes l, vSpace, strWrap (take 100 $ show k)]
 renderArrWordsLines (FieldLine cd) = renderInlineClosureDesc cd
 
+-- STATUS: Incomplete
 -- | Render a histogram with n lines which displays the number of elements in each bucket,
 -- and how much they contribute to the total size.
 histogram :: Int -> [GD.Size] -> Widget Name
@@ -816,12 +849,14 @@ histogram boxes m =
       where
         (now, later) = span ((<= k + step) . snd) xs
 
+-- STATUS: Design
 -- | Vertical space used to separate elements on the same line.
 --
 -- This is standardised for a consistent UI.
 vSpace :: Widget n
 vSpace = txt "   "
 
+-- STATUS: Incomplete
 arrWordsAction :: Debuggee -> EventM n OperationalState ()
 arrWordsAction dbg = do
   outside_os <- get
@@ -862,6 +897,7 @@ arrWordsAction dbg = do
 
 data ThunkLine = ThunkLine (Maybe SourceInformation) Count
 
+-- STATUS: Incomplete
 thunkAnalysisAction :: Debuggee -> EventM n OperationalState ()
 thunkAnalysisAction dbg = do
   outside_os <- get
@@ -888,6 +924,7 @@ thunkAnalysisAction dbg = do
         )
 
 
+-- STATUS: Incomplete
 searchWithCurrentFilters :: Debuggee -> EventM n OperationalState ()
 searchWithCurrentFilters dbg = do
   outside_os <- get
@@ -901,10 +938,12 @@ searchWithCurrentFilters dbg = do
             & treeMode .~ Retainer renderClosureDetails tree
         )
 
+-- STATUS: Incomplete
 filterOrRun :: Debuggee -> Form Text () Name -> Bool -> (String -> Maybe a) -> (a -> [UIFilter]) -> EventM n OperationalState ()
 filterOrRun dbg form doRun parse createFilter =
   filterOrRunM dbg form doRun parse (pure . createFilter)
 
+-- STATUS: Incomplete
 filterOrRunM :: Debuggee -> Form Text () Name -> Bool -> (String -> Maybe a) -> (a -> EventM n OperationalState [UIFilter]) -> EventM n OperationalState ()
 filterOrRunM dbg form doRun parse createFilterM = do
   case parse (T.unpack (formState form)) of
@@ -920,6 +959,7 @@ filterOrRunM dbg form doRun parse createFilterM = do
 
 data ProfileLine  = ProfileLine GDP.ProfileKey GDP.ProfileKeyArgs CensusStats | ClosureLine ClosureDetails
 
+-- STATUS: Incomplete
 renderProfileLine :: ProfileLine -> [Widget Name]
 renderProfileLine (ClosureLine c) = renderInlineClosureDesc c
 renderProfileLine (ProfileLine k kargs c) =
@@ -942,6 +982,7 @@ renderProfileLine (ProfileLine k kargs c) =
     avgSizeColor = Vty.RGBColor 0xAB 0x4D 0xE0
 
 
+-- STATUS: Incomplete
 -- | What happens when we press enter in footer input mode
 dispatchFooterInput :: Debuggee
                     -> FooterInputMode
@@ -1027,9 +1068,11 @@ dispatchFooterInput dbg FSnapshot form = do
    os <- get
    asyncAction_ "Taking snapshot" os $ snapshot dbg (T.unpack (formState form))
 
+-- STATUS: Incomplete
 asyncAction_ :: Text -> OperationalState -> IO a -> EventM n OperationalState ()
 asyncAction_ desc  os action = asyncAction desc os action (\_ -> return ())
 
+-- STATUS: Incomplete
 asyncAction :: Text -> OperationalState -> IO a -> (a -> EventM Name OperationalState ()) -> EventM n OperationalState ()
 asyncAction desc os action final = do
   tid <- (liftIO $ forkIO $ do
@@ -1045,7 +1088,7 @@ asyncAction desc os action final = do
     eventChan = view event_chan os
 
 
-
+-- STATUS: Incomplete
 mkRetainerTree :: Debuggee -> [[ClosureDetails]] -> IOTree ClosureDetails Name
 mkRetainerTree dbg stacks = do
   let stack_map = [ (cp, rest) | stack <- stacks, Just (cp, rest) <- [List.uncons stack]]
@@ -1066,15 +1109,19 @@ mkRetainerTree dbg stacks = do
 
   mkIOTree dbg roots lookup_c renderInlineClosureDesc id
 
+-- STATUS: Incomplete
 resetFooter :: OperationalState -> OperationalState
 resetFooter l = (set footerMode FooterInfo l)
 
+-- STATUS: Incomplete
 footerMessage :: Text -> OperationalState -> OperationalState
 footerMessage t l = (set footerMode (FooterMessage t) l)
 
+-- STATUS: Incomplete
 myAppStartEvent :: EventM Name AppState ()
 myAppStartEvent = return ()
 
+-- STATUS: Design
 myAppAttrMap :: AppState -> AttrMap
 myAppAttrMap _appState =
   attrMap (Vty.withStyle (Vty.white `on` Vty.black) Vty.dim)
@@ -1086,37 +1133,47 @@ myAppAttrMap _appState =
     , (disabledMenuAttr, Vty.withStyle (grey `on` Vty.blue) Vty.bold)
     ]
 
+-- STATUS: Design
 menuAttr :: AttrName
 menuAttr = attrName "menu"
 
+-- STATUS: Design
 inputAttr :: AttrName
 inputAttr = attrName "input"
 
+-- STATUS: Design
 labelAttr :: AttrName
 labelAttr = attrName "label"
 
+-- STATUS: Design
 treeAttr :: AttrName
 treeAttr = attrName "tree"
 
+-- STATUS: Design
 highlightAttr :: AttrName
 highlightAttr = attrName "highlighted"
 
+-- STATUS: Design
 disabledMenuAttr :: AttrName
 disabledMenuAttr = attrName "disabledMenu"
 
+-- STATUS: Design
 txtLabel :: Text -> Widget n
 txtLabel = withAttr labelAttr . txt
 
+-- STATUS: Design
 strLabel :: String -> Widget n
 strLabel = withAttr labelAttr . str
 
+-- STATUS: Design
 highlighted :: Widget n -> Widget n
 highlighted = forceAttr highlightAttr
 
+-- STATUS: Design
 disabledMenuItem :: Widget n -> Widget n
 disabledMenuItem = forceAttr disabledMenuAttr
 
-
+-- STATUS: Incomplete
 myAppHandleEvent :: BrickEvent Name Event -> EventM Name AppState ()
 myAppHandleEvent brickEvent = do
   appState@(AppState majorState' eventChan) <- get
@@ -1275,6 +1332,9 @@ renderConnectedPage expandedPaths selectedPath mInc socket debuggee mode = rende
     form_ [method_ "post", action_ "/pause"] $ 
       button_ "Pause process" 
   PausedMode os -> do
+    {-div_ [style_ "position: absolute; top: 50px; right: 10px;"] $
+      form_ [method_ "get", action_ "/profile"] $
+        button_ [type_ "submit"] "View profile"-}
     let tree = _treeSavedAndGCRoots os
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
     form_ [method_ "post", action_ "/resume"] $
@@ -1683,6 +1743,7 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr <> "&expanded=" <> TL.fromStrict expandedStr
       _ -> Scotty.redirect "/"
+  {- Creates and displays the graph for the selected object -}
   Scotty.post "/img" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
@@ -1706,31 +1767,13 @@ app appStateRef = do
 
 
 
-  where {- Currently just shows saved objects, not GC roots, PLEASE FIX-}
-        mkSavedAndGCRootsIOTree debuggee' = do
+  where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
           raw_saved <- map ("Saved Object",) <$> GD.savedClosures debuggee'
           savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
-          --expandedRoots <- mapM (expandNode debuggee' Set.empty) (savedClosures' {-++ rootClosures'-})
           return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
-
-
-expandNode :: Debuggee -> Set.Set String -> ClosureDetails -> IO (IOTreeNode ClosureDetails Name)
-expandNode debuggee visited node@(ClosureDetails c _ _) = 
-  let ptr = closureShowAddress c
-  in if Set.member ptr visited 
-     then do 
-       return $ IOTreeNode node (Right [])
-     else do
-       children <- getChildren debuggee node
-       expandedChildren <- mapM (expandNode debuggee (Set.insert ptr visited)) children
-       return $ IOTreeNode
-         { _node = node,
-           _children = Right expandedChildren
-         }
-expandNode _ _ _ = error "error: closureDetails type not supported"
 
 main :: IO ()
 main = newMain
