@@ -1325,8 +1325,8 @@ renderBadSocketPage =
     form_ [method_ "get", action_ "/"] $ do
       button_ "Select another socket"
 
-renderConnectedPage :: [[Int]] -> [Int] -> Maybe (Int, Bool) -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
-renderConnectedPage expandedPaths selectedPath mInc socket debuggee mode = renderText $ case mode of
+renderConnectedPage :: [Int] -> Maybe (Int, Bool) -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
+renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case mode of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
@@ -1344,16 +1344,15 @@ renderConnectedPage expandedPaths selectedPath mInc socket debuggee mode = rende
     renderSummary tree selectedPath
     case mInc of
       Nothing -> mempty
-      Just (incSize, capped) -> renderIncSize incSize capped selectedPath expandedPaths
+      Just (incSize, capped) -> renderIncSize incSize capped selectedPath
     form_ [method_ "post", action_ "/img"] $ do
       input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-      input_ [type_ "hidden", name_ "expanded", value_ (encodePaths expandedPaths)]
       button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
-    renderIOTreeHtml tree selectedPath expandedPaths renderClosureHtmlRow
+    renderIOTreeHtml tree selectedPath renderClosureHtmlRow
 
 
 renderSummary
@@ -1383,8 +1382,8 @@ renderSummary tree path =
       CCDetails _ c -> do
         renderCC c
 
-renderIncSize :: Int -> Bool -> [Int] -> [[Int]] -> Html ()
-renderIncSize incSize capped selectedPath expandedPaths = do 
+renderIncSize :: Int -> Bool -> [Int] -> Html ()
+renderIncSize incSize capped selectedPath = do 
   li_ $ do
     strong_ "Inclusive size: "
     toHtml ((if capped then ">=" else "") ++
@@ -1394,19 +1393,17 @@ renderIncSize incSize capped selectedPath expandedPaths = do
   {-if capped then 
     form_ [method_ "post", action_ "/incSize"] $ do
       input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-      input_ [type_ "hidden", name_ "expanded", value_ (encodePaths expandedPaths)]
       button_ [type_ "submit", class_ "inc-button"] $ "See inclusive size"
   else mempty-}
 
-renderImgPage :: String -> [Int] -> [[Int]] -> Bool -> TL.Text
-renderImgPage name selectedPath expandedPaths capped =
+renderImgPage :: String -> [Int] -> Bool -> TL.Text
+renderImgPage name selectedPath capped =
   renderText $ do
     h1_ $ toHtml $ "Visualisation of " ++ name
     if capped then h2_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
     body_ $ do
       let pathStr = encodePath selectedPath
-          expandedStr = encodePaths expandedPaths
-      div_ $ a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ "Return to debuggee"
+      div_ $ a_ [href_ ("/connect?selected=" <> pathStr)] $ "Return to debuggee"
       div_ $ a_ [ href_ "/graph"
                 , download_ "graph.svg"
                 , style_ "display: inline-block; margin-top: 1em;"
@@ -1426,23 +1423,21 @@ renderClosureHtml (CCDetails clabel cc) = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ clabel <> " | " <> prettyCC cc
 
 
-renderClosureHtmlRow :: [Int] -> [[Int]] -> [Int] -> Bool -> Bool -> ClosureDetails -> Html ()
-renderClosureHtmlRow selectedPath expandedPaths thisPath expanded selected closureDesc =
+renderClosureHtmlRow :: [Int] -> [Int] -> Bool -> Bool -> ClosureDetails -> Html ()
+renderClosureHtmlRow selectedPath thisPath expanded selected closureDesc =
   let depth = length thisPath
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
       styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
       pathStr = encodePath thisPath
       selectedStr = encodePath selectedPath
-      expandedStr = encodePaths expandedPaths
   in div_ [class_ classStr, styleAttr] $ do
       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
         input_ [type_ "hidden", name_ "selected", value_ selectedStr]
-        input_ [type_ "hidden", name_ "expanded", value_ expandedStr]
         button_ [type_ "submit", class_ "expand-button"] $ 
           toHtml $ if expanded then "+" else "-" :: String
-      a_ [href_ ("/connect?selected=" <> pathStr <> "&expanded=" <> expandedStr)] $ renderClosureHtml closureDesc
+      a_ [href_ ("/connect?selected=" <> pathStr)] $ renderClosureHtml closureDesc
 
 
 renderSourceInfoSummary :: SourceInformation -> Html ()
@@ -1537,10 +1532,6 @@ getNodeName :: IOTreeNode ClosureDetails name -> String
 getNodeName (IOTreeNode (ClosureDetails c excSize info) _) = closureShowAddress c
 getNodeName (IOTreeNode (InfoDetails info) _) = show $ _labelInParent info
 
-parsePaths :: String -> [[Int]]
-parsePaths [] = []
-parsePaths s = map (map read . splitOn ".") (splitOn "," s)
-
 parsePath :: String -> [Int]
 parsePath [] = []
 parsePath s = map read $ splitOn "." s
@@ -1549,15 +1540,18 @@ unquote :: String -> String
 unquote ('\"':xs) | last xs == '\"' = init xs
 unquote xs = xs
 
-
 encodePath :: [Int] -> Text
 encodePath = pack . List.intercalate "." . map show
 
-encodePaths :: [[Int]] -> Text
-encodePaths = T.intercalate "," . map encodePath
-
 togglePath :: Eq a => [a] -> [[a]] -> [[a]]
 togglePath x xs = if x `elem` xs then filter (/=x) xs else x:xs
+
+toggleSelected :: Eq a => [a] -> [a] -> [a]
+toggleSelected selectedPath togglePath
+  | sLen <= tLen = selectedPath
+  | take tLen selectedPath == togglePath = togglePath  
+  where sLen = length selectedPath
+        tLen = length togglePath
 
 -- Helper function for reading parameters
 -- name is a String, the name of the parameter
@@ -1569,7 +1563,6 @@ readParam name getParam f def = do
   return $ f p
 
 selectedParam getParam = readParam "selected" getParam parsePath "0"
-expandedParam getParam = readParam "expanded" getParam parsePaths "" 
 togglePathParam getParam = readParam "toggle" getParam parsePath ""
 
 myGraph :: [Int] -> Data.GraphViz.Types.Generalised.DotGraph Int
@@ -1616,7 +1609,6 @@ app appStateRef = do
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
-    expandedPaths <- expandedParam Scotty.queryParam 
     case state ^. majorState of
       Connected socket debuggee mode -> 
         case mode of 
@@ -1625,8 +1617,8 @@ app appStateRef = do
             let subtree = getSubTree tree selectedPath
             (expSubTree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
             let incSize = getClosureIncSize Set.empty expSubTree
-            Scotty.html $ renderConnectedPage expandedPaths selectedPath (Just (incSize, capped)) socket debuggee mode
-          _ -> Scotty.html $ renderConnectedPage expandedPaths selectedPath Nothing socket debuggee mode
+            Scotty.html $ renderConnectedPage selectedPath (Just (incSize, capped)) socket debuggee mode
+          _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee mode
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
@@ -1658,15 +1650,14 @@ app appStateRef = do
               Nothing -> Scotty.html $ renderBadSocketPage 
       Connected socket debuggee mode -> do
         selectedPath <- selectedParam Scotty.queryParam        
-        expandedPaths <- expandedParam Scotty.queryParam 
         case mode of
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
             let subtree = getSubTree tree selectedPath
             (expSubTree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
             let incSize = getClosureIncSize Set.empty expSubTree
-            Scotty.html $ renderConnectedPage expandedPaths selectedPath (Just (incSize, capped)) socket debuggee mode
-          _ -> Scotty.html $ renderConnectedPage expandedPaths selectedPath Nothing socket debuggee mode
+            Scotty.html $ renderConnectedPage selectedPath (Just (incSize, capped)) socket debuggee mode
+          _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee mode
   {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
@@ -1726,14 +1717,12 @@ app appStateRef = do
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/"
       _ -> Scotty.redirect "/"
-  {- Adds/removes path from expanded paths parameter -}
+  {- Toggles the expansion state of a path in the tree -}
   Scotty.post "/toggle" $ do
     toggleIx <- togglePathParam Scotty.formParam
     selectedPath <- selectedParam Scotty.formParam
-    expandedPaths <- expandedParam Scotty.formParam 
-    let newExpandedPaths = togglePath toggleIx expandedPaths
-    let selectedStr = encodePath selectedPath
-    let expandedStr = encodePaths newExpandedPaths 
+    let newSelected = toggleSelected selectedPath toggleIx
+    let selectedStr = encodePath newSelected
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected socket debuggee (PausedMode os) -> do
@@ -1741,7 +1730,7 @@ app appStateRef = do
         newTree <- liftIO $ toggleTreeByPath tree toggleIx
         let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr <> "&expanded=" <> TL.fromStrict expandedStr
+        Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
       _ -> Scotty.redirect "/"
   {- Creates and displays the graph for the selected object -}
   Scotty.post "/img" $ do
@@ -1751,7 +1740,6 @@ app appStateRef = do
         case mode of
           PausedMode os -> do
             selectedPath <- selectedParam Scotty.formParam
-            expandedPaths <- expandedParam Scotty.formParam 
             let tree = _treeSavedAndGCRoots os
             let subtree = getSubTree tree selectedPath
             (expSubtree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
@@ -1763,7 +1751,7 @@ app appStateRef = do
               let graph = buildClosureGraph vizNodes vizEdges
               _ <- runGraphviz graph Svg svgPath
               return ()
-            Scotty.html $ renderImgPage name selectedPath expandedPaths capped
+            Scotty.html $ renderImgPage name selectedPath capped
 
 
 

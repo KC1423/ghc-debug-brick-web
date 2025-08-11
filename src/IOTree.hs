@@ -421,41 +421,40 @@ flattenTreeHtml
   -> Int
   -> [IOTreeNode node name]
   -> [Int]
-  -> [[Int]]
   -> [Int]
   -> [RenderTree (TreeNodeWithRenderContext node)]
-flattenTreeHtml _ _ [] _ _ _ = []
-flattenTreeHtml depth minorIx (IOTreeNode node' csE : ns) selection expandedPaths parentPath =
-  let thisPath = parentPath ++ [minorIx]
-      childIsSelected = selection `isChildOf` thisPath
-      rowCtx = if null ns then LastRow else NotLastRow
-      treeNode = TreeNodeWithRenderContext {
-        _nodeDepth = length depth,
-        _nodeState = Expanded (thisPath `elem` expandedPaths),
-        _nodeSelected = False,
-        _nodeLast = rowCtx,
-        _nodeParentLast = depth,
-        _nodeContent = node'
-      }
-      children = case csE of
-        Left _ -> []
-        Right cs ->
-          if thisPath `elem` expandedPaths
-          then flattenTreeHtml (rowCtx : depth) 0 cs (if childIsSelected then drop 1 selection else []) expandedPaths thisPath
-          else []
-  in RenderNode treeNode children : flattenTreeHtml depth (minorIx + 1) ns selection expandedPaths parentPath
-  where isChildOf :: Eq a => [a] -> [a] -> Bool
+flattenTreeHtml _ _ [] _ _ = []
+flattenTreeHtml depth minorIx (IOTreeNode node' csE : ns) selection parentPath =
+  case csE of
+    Left _ -> RenderNode (row Collapsed) [] : rest
+    Right cs -> RenderNode (row (Expanded $ null cs)) 
+                  (flattenTreeHtml (rowCtx : depth) 0 cs 
+                      (if childIsSelected then drop 1 selection else []) thisPath)
+                  : rest
+  where rest = flattenTreeHtml depth (minorIx + 1) ns selection parentPath
+        thisPath = parentPath ++ [minorIx]
+        childIsSelected = selection `isChildOf` thisPath
+        rowCtx = if null ns then LastRow else NotLastRow
+        row state = TreeNodeWithRenderContext {
+          _nodeDepth = length depth,
+          _nodeState = state,
+          _nodeSelected = False,
+          _nodeLast = rowCtx,
+          _nodeParentLast = depth,
+          _nodeContent = node'
+        }
+        isChildOf :: Eq a => [a] -> [a] -> Bool
         isChildOf (x:xs) (y:ys) = x == y && isChildOf xs ys
         isChildOf [] _ = True
         isChildOf _ [] = False
 
+
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
                                           -> [Int]
-                                          -> [[Int]]
-                                          -> ([Int] -> [[Int]] -> [Int] -> Bool -> Bool -> node -> Html ())
+                                          -> ([Int] -> [Int] -> Bool -> Bool -> node -> Html ())
                                           -> Html ()
-renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath expandedPaths renderRow =
-  let tree = flattenTreeHtml [] 0 roots [] expandedPaths []
+renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath renderRow =
+  let tree = flattenTreeHtml [] 0 roots [] []
   in div_ [class_ "iotree"] $
        go [] tree
   where go _ [] = mempty
@@ -463,8 +462,10 @@ renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath expandedPaths renderRow =
           where renderOne ix (RenderNode TreeNodeWithRenderContext{..} children) =
                   let thisPath = parentPath ++ [ix]
                       selected = thisPath == selectedPath
-                      expanded = thisPath `elem` expandedPaths
-                      rowHtml = renderRow selectedPath expandedPaths thisPath expanded selected _nodeContent
+                      expanded = case _nodeState of 
+                                   Expanded True -> True
+                                   _ -> False
+                      rowHtml = renderRow selectedPath thisPath expanded selected _nodeContent
                       childHtml = go thisPath children
                   in rowHtml <> childHtml
 
@@ -494,7 +495,7 @@ toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
                                    Left getChildren -> do
                                      cs <- getChildren
                                      return $ IOTreeNode node' (Right cs) : rest                
-                                   Right _ -> return $ n : rest
+                                   Right cs -> return $ IOTreeNode node' (Left $ return cs) : rest
                             else case csE of
                                    Left getChildren -> do
                                      csE' <- getChildren
@@ -530,7 +531,7 @@ expandNodeWithCap cap n format = do
                            return (IOTreeNode node (Right newCs'), seen')
     processChildren seen [] = return ([], seen)
     processChildren seen (c:cs)
-      | cap == Set.size seen = return (c:cs, seen)
+      | cap == Set.size seen = return ([]{-c:cs-}, seen)
       | otherwise = do
           (c', seen') <- go seen c
           (cs', seen'') <- processChildren seen' cs
