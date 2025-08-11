@@ -20,7 +20,6 @@ module Main where
 import qualified Web.Scotty as Scotty
 import Data.IORef
 import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
@@ -1269,8 +1268,8 @@ renderBadSocketPage =
     form_ [method_ "get", action_ "/"] $ do
       button_ "Select another socket"
 
-renderConnectedPage :: [[Int]] -> [Int] -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
-renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mode of
+renderConnectedPage :: [[Int]] -> [Int] -> Maybe (Int, Bool) -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
+renderConnectedPage expandedPaths selectedPath mInc socket debuggee mode = renderText $ case mode of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
@@ -1282,27 +1281,62 @@ renderConnectedPage expandedPaths ix socket debuggee mode = renderText $ case mo
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    -- here 'inclusive size' is ingrained, and requires a fully expanded subtree
-    -- the problem here is that very large objects (e.g. GC roots) shouldn't be fully expanded
-    -- I think maybe capping it could be a good idea
-    -- but right now this is just here so it compiles
-    renderIOSummary tree ix renderSummary --(const 0)--getClosureIncSize Set.empty)
-    form_ [method_ "post", action_ "/incSize"] $ do
-      input_ [type_ "hidden", name_ "selected", value_ (encodePath ix)]
-      input_ [type_ "hidden", name_ "expanded", value_ (encodePaths expandedPaths)]
-      button_ [type_ "submit", class_ "inc-button"] $ "See inclusive size" 
+    renderSummary tree selectedPath
+    case mInc of
+      Nothing -> mempty
+      Just (incSize, capped) -> renderIncSize incSize capped selectedPath expandedPaths
     form_ [method_ "post", action_ "/img"] $ do
-      input_ [type_ "hidden", name_ "selected", value_ (encodePath ix)]
+      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
       input_ [type_ "hidden", name_ "expanded", value_ (encodePaths expandedPaths)]
       button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
     h3_ $ toHtml $ case os ^. treeMode of
         SavedAndGCRoots {} -> pack "Root Closures"
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
-    renderIOTreeHtml tree ix expandedPaths renderClosureHtmlRow
+    renderIOTreeHtml tree selectedPath expandedPaths renderClosureHtmlRow
 
-renderTempIncSize :: Int -> TL.Text
-renderTempIncSize size = renderText $ h1_ $ toHtml $ show size ++ "B"
+
+renderSummary
+  :: (Ord name, Show name)
+  => IOTree ClosureDetails name
+  -> [Int]
+  -> Html ()
+renderSummary tree path = 
+  div_ [class_ "closure-summary"] $ do
+    let (IOTreeNode node _) = getSubTree tree path
+    h3_ "Selected closure"
+    case node of
+      ClosureDetails c excSize info -> do 
+        renderInfoSummary info
+        li_ $ do
+          strong_ "Exclusive size: "
+          toHtml (show (getSize excSize) <> "B")
+      LabelNode n -> do
+        li_ $ toHtml n
+      InfoDetails info -> do
+        renderInfoSummary info
+      CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
+        li_ $ do 
+          strong_ "ID: "
+          toHtml (show ccsID) 
+        renderCC ccsCc
+      CCDetails _ c -> do
+        renderCC c
+
+renderIncSize :: Int -> Bool -> [Int] -> [[Int]] -> Html ()
+renderIncSize incSize capped selectedPath expandedPaths = do 
+  li_ $ do
+    strong_ "Inclusive size: "
+    toHtml ((if capped then ">=" else "") ++
+            show incSize ++ "B" ++ 
+            (if capped then " (Note: this is a very large object. This is a partial calculation)" else ""))
+  -- Possible button here for 'unsafe' full calculation
+  {-if capped then 
+    form_ [method_ "post", action_ "/incSize"] $ do
+      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+      input_ [type_ "hidden", name_ "expanded", value_ (encodePaths expandedPaths)]
+      button_ [type_ "submit", class_ "inc-button"] $ "See inclusive size"
+  else mempty-}
 
 renderImgPage :: String -> [Int] -> [[Int]] -> Bool -> TL.Text
 renderImgPage name selectedPath expandedPaths capped =
@@ -1391,30 +1425,6 @@ renderCC Debug.CCPayload{..} = do
   li_ $ strong_ "Time ticks: " >> toHtml (show ccTimeTicks)
   li_ $ strong_ "Is CAF: " >> toHtml (show ccIsCaf) 
 
-renderSummary :: ClosureDetails -> Html ()
-renderSummary (ClosureDetails c excSize info) = 
-  div_ [class_ "closure-summary"] $ do
-    h3_ "Selected closure"
-    renderInfoSummary info
-    li_ $ strong_ "Exclusive size: " >> toHtml (show (getSize excSize) <> "B")
-renderSummary (LabelNode n) =
-  div_ [class_ "closure-summary"] $ do
-    h3_ "Selected closure"
-    li_ $ toHtml n
-renderSummary (InfoDetails info) = 
-  div_ [class_ "closure-summary"] $ do
-    h3_ "Selected closure"
-    renderInfoSummary info
-renderSummary (CCSDetails _ _ptr (Debug.CCSPayload{..})) =
-  div_ [class_ "closure-summary"] $ do
-    h3_ "Selected closure"
-    li_ $ strong_ "ID: " >> toHtml (show ccsID) 
-    renderCC ccsCc
-renderSummary (CCDetails _ c) = 
-  div_ [class_ "closure-summary"] $ do
-    h3_ "Selected closure"
-    renderCC c
-
 getClosureIncSize :: Set.Set String -> IOTreeNode ClosureDetails name -> Int
 getClosureIncSize seen' node = fst (go seen' node)
   where
@@ -1438,7 +1448,7 @@ type EdgeList = [(String, String)]
 
 getClosureVizTree :: Set.Set String -> EdgeList -> IOTreeNode ClosureDetails name -> (Set.Set String, EdgeList)
 getClosureVizTree nodes edges (IOTreeNode n csE) =
-  let ptr = format n
+  let ptr = closureFormat n
   in if Set.member ptr nodes
      then (nodes, [])
      else case csE of
@@ -1446,7 +1456,7 @@ getClosureVizTree nodes edges (IOTreeNode n csE) =
             Right csE -> 
               let nodes'' = Set.insert ptr nodes
                   (nodesFinal, childEdges) = listApply getClosureVizTree (nodes'', edges) csE
-                  children = [ format n'
+                  children = [ closureFormat n'
                              | IOTreeNode n' _ <- csE ]
                   newEdges = map (\ch -> (ptr, ch)) children
               in (nodesFinal, childEdges ++ newEdges)
@@ -1455,45 +1465,14 @@ getClosureVizTree nodes edges (IOTreeNode n csE) =
       foldl (\(nsAcc, esAcc) x ->
                let (ns', es') = f nsAcc [] x
                in (ns', esAcc ++ es')) (ns, es) xs
-    format (ClosureDetails clo _ inf) = closureShowAddress clo ++ "\n" ++ takeWhile (/=' ') (unquote (show (_pretty inf)))
-    format (InfoDetails inf) = unquote (show (_labelInParent inf))
-    format (LabelNode l) = unquote $ show l
-    format x = error $ "viztree format, missing implementation: " ++ show x
 getClosureVizTree nodes edges _ = (nodes, edges)
 
+closureFormat :: ClosureDetails -> String
 closureFormat (ClosureDetails clo _ inf) = closureShowAddress clo ++ "\n" ++ takeWhile (/=' ') (unquote (show (_pretty inf)))
 closureFormat (InfoDetails inf) = unquote (show (_labelInParent inf))
 closureFormat (LabelNode l) = unquote $ show l
 closureFormat x = error $ "viztree format, missing implementation: " ++ show x
 
-
-{-
-getClosureVizTree :: Set.Set String -> EdgeList -> IOTreeNode ClosureDetails name -> (Set.Set String, EdgeList)
-getClosureVizTree nodes' edges' node = go nodes' edges' node
-  where 
-    go nodes edges (IOTreeNode n csE) =
-      let ptr = format n
-      in if Set.member ptr nodes
-         then (nodes, [])
-         else case csE of
-                Left _ -> (Set.insert ptr nodes, [])
-                Right csE -> 
-                  let nodes'' = Set.insert ptr nodes
-                      (nodesFinal, childEdges) = listApply go (nodes'', edges) csE
-                      children = [ format n'
-                                 | IOTreeNode n' _ <- csE ]
-                      newEdges = map (\ch -> (ptr, ch)) children
-                  in (nodesFinal, childEdges ++ newEdges)
-    go nodes edges _ = (nodes, edges)
-    listApply f (ns, es) xs =
-      foldl (\(nsAcc, esAcc) x ->
-               let (ns', es') = f nsAcc [] x
-               in (ns', esAcc ++ es')) (ns, es) xs
-    format (ClosureDetails clo _ inf) = closureShowAddress clo ++ "\n" ++ takeWhile (/=' ') (unquote (show (_pretty inf)))
-    format (InfoDetails inf) = unquote (show (_labelInParent inf))
-    format (LabelNode l) = unquote $ show l
-    format x = error $ "viztree format, missing implementation: " ++ show x
--}
 getNodeName :: IOTreeNode ClosureDetails name -> String
 getNodeName (IOTreeNode (ClosureDetails c excSize info) _) = closureShowAddress c
 getNodeName (IOTreeNode (InfoDetails info) _) = show $ _labelInParent info
@@ -1548,12 +1527,15 @@ buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
                                   "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
   where nids = zipWith (\n i -> (n,i)) nodes [1..]
 
+svgPath :: String
+svgPath = "tmp/graph.svg"
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
+  {- Serves the visualisation of the selected object -}
   Scotty.get "/graph" $ do
     Scotty.setHeader "Content-Type" "image/svg+xml"
-    Scotty.file "tmp/graph.svg"
+    Scotty.file svgPath
 
   {- Main page where sockets/snapshots can be selected for debugging -}
   Scotty.get "/" $ do
@@ -1573,10 +1555,18 @@ app appStateRef = do
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
-    ix <- selectedParam Scotty.queryParam
+    selectedPath <- selectedParam Scotty.queryParam
     expandedPaths <- expandedParam Scotty.queryParam 
     case state ^. majorState of
-      Connected socket debuggee mode -> Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee mode
+      Connected socket debuggee mode -> 
+        case mode of 
+          PausedMode os -> do
+            let tree = _treeSavedAndGCRoots os
+            let subtree = getSubTree tree selectedPath
+            (expSubTree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
+            let incSize = getClosureIncSize Set.empty expSubTree
+            Scotty.html $ renderConnectedPage expandedPaths selectedPath (Just (incSize, capped)) socket debuggee mode
+          _ -> Scotty.html $ renderConnectedPage expandedPaths selectedPath Nothing socket debuggee mode
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
@@ -1602,16 +1592,21 @@ app appStateRef = do
                             _mode = RunningMode
                           }
                   liftIO $ writeIORef appStateRef newState
-                  ix <- selectedParam Scotty.queryParam
-                  expandedPaths <- expandedParam Scotty.queryParam 
-                  Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee RunningMode
+                  Scotty.redirect "/connect"
                 else do
                   Scotty.html $ renderBadSocketPage
               Nothing -> Scotty.html $ renderBadSocketPage 
       Connected socket debuggee mode -> do
-        ix <- selectedParam Scotty.queryParam        
+        selectedPath <- selectedParam Scotty.queryParam        
         expandedPaths <- expandedParam Scotty.queryParam 
-        Scotty.html $ renderConnectedPage expandedPaths ix socket debuggee mode
+        case mode of
+          PausedMode os -> do
+            let tree = _treeSavedAndGCRoots os
+            let subtree = getSubTree tree selectedPath
+            (expSubTree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
+            let incSize = getClosureIncSize Set.empty expSubTree
+            Scotty.html $ renderConnectedPage expandedPaths selectedPath (Just (incSize, capped)) socket debuggee mode
+          _ -> Scotty.html $ renderConnectedPage expandedPaths selectedPath Nothing socket debuggee mode
   {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
@@ -1674,10 +1669,10 @@ app appStateRef = do
   {- Adds/removes path from expanded paths parameter -}
   Scotty.post "/toggle" $ do
     toggleIx <- togglePathParam Scotty.formParam
-    ix <- selectedParam Scotty.formParam
+    selectedPath <- selectedParam Scotty.formParam
     expandedPaths <- expandedParam Scotty.formParam 
     let newExpandedPaths = togglePath toggleIx expandedPaths
-    let selectedStr = encodePath ix
+    let selectedStr = encodePath selectedPath
     let expandedStr = encodePaths newExpandedPaths 
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
@@ -1688,19 +1683,6 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr <> "&expanded=" <> TL.fromStrict expandedStr
       _ -> Scotty.redirect "/"
-  Scotty.post "/incSize" $ do
-    state <- liftIO $ readIORef appStateRef
-    case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
-          PausedMode os -> do
-            selectedPath <- selectedParam Scotty.formParam
-            expandedPaths <- expandedParam Scotty.formParam 
-            let tree = _treeSavedAndGCRoots os
-            let subtree = getSubTree tree selectedPath
-            (expSubTree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
-            let incSize = getClosureIncSize Set.empty expSubTree
-            Scotty.html $ renderTempIncSize incSize
   Scotty.post "/img" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
@@ -1715,7 +1697,6 @@ app appStateRef = do
             let name = getNodeName subtree
             let (nodes', vizEdges) = getClosureVizTree Set.empty [] expSubtree
             let vizNodes = Set.toList nodes'
-            let svgPath = "tmp/graph.svg"
             liftIO $ do
               createDirectoryIfMissing True "tmp"
               let graph = buildClosureGraph vizNodes vizEdges

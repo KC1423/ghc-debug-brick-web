@@ -32,7 +32,6 @@ module IOTree
   , viewIsCollapsed
 
   , renderIOTreeHtml
-  , renderIOSummary
   , IOTreeNode(..)
   , getSubTree
   , toggleTreeByPath
@@ -469,17 +468,6 @@ renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath expandedPaths renderRow =
                       childHtml = go thisPath children
                   in rowHtml <> childHtml
 
-renderIOSummary
-  :: (Ord name, Show name)
-  => IOTree node name
-  -> [Int]
-  -> (node -> Html ())
-  -> Html ()
-renderIOSummary tree path renderSummary = 
-  div_ [class_ "iotree-container"] $ do
-    let (IOTreeNode node _) = getSubTree tree path
-    renderSummary node
-
 getSubTree :: IOTree node name -> [Int] -> IOTreeNode node name
 getSubTree (IOTree _ roots _ _ _) path =
   case findNodeByPath roots path of
@@ -506,7 +494,7 @@ toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
                                    Left getChildren -> do
                                      cs <- getChildren
                                      return $ IOTreeNode node' (Right cs) : rest                
-                                   cs -> return $ n : rest
+                                   Right _ -> return $ n : rest
                             else case csE of
                                    Left getChildren -> do
                                      csE' <- getChildren
@@ -520,7 +508,7 @@ toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
                return $ n : rest'
  
 expandNodeSafe :: IOTreeNode node name -> (node -> String) -> IO (IOTreeNode node name, Bool)
-expandNodeSafe = expandNodeWithCap 100 --10 --1000 --25000
+expandNodeSafe = expandNodeWithCap 100
 
 expandNodeWithCap :: Int -> IOTreeNode node name -> (node -> String) -> IO (IOTreeNode node name, Bool)
 expandNodeWithCap cap n format = do
