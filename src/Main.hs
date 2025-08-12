@@ -1333,7 +1333,7 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
       button_ "Pause process" 
   PausedMode os -> do
     div_ [style_ "position: absolute; top: 50px; right: 10px;"] $
-      form_ [method_ "get", action_ "/profile"] $
+      form_ [method_ "post", action_ "/profile"] $
         button_ [type_ "submit"] "View profile"
     let tree = _treeSavedAndGCRoots os
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
@@ -1353,7 +1353,7 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
         Retainer {} -> pack "Retainers"
         Searched {} -> pack "Search Results"
     renderIOTreeHtml tree selectedPath renderClosureHtmlRow
-
+    autoScrollScript
 
 renderSummary
   :: (Ord name, Show name)
@@ -1381,6 +1381,14 @@ renderSummary tree path =
         renderCC ccsCc
       CCDetails _ c -> do
         renderCC c
+
+{-
+renderProfileSummary tree path =
+  div_ [class_ "profile-summary"] $ do
+    let (IOTree node _) = getSubTree tree path
+    h3_ "Details"
+    case Node of  
+-}
 
 renderIncSize :: Int -> Bool -> [Int] -> Html ()
 renderIncSize incSize capped selectedPath = do 
@@ -1410,11 +1418,21 @@ renderImgPage name selectedPath capped =
                 ] "Download SVG"
       img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
 
-renderProfilePage :: (Ord name, Show name) => IOTree ProfileLine name -> CensusStats -> TL.Text
-renderProfilePage tree stats =
-  renderText $ do
-    h1_ "profile page here"
-    renderIOTreeHtml tree [] renderProfileHtmlRow    
+renderProfilePage :: [Int] -> ConnectedMode -> TL.Text
+renderProfilePage selectedPath mode = renderText $ case mode of
+  PausedMode os -> do
+    case _treeMode os of
+      SearchedHtml renderFn tree stats -> do
+        h1_ "Profile"
+        div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
+          button_ [ type_ "submit"
+                  , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
+                  ] "Return to saved objects and GC roots"
+        div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
+        --renderProfileSummary tree selectedPath 
+        renderIOTreeHtml tree selectedPath (detailedRowHtml renderFn)
+        autoScrollScript
+
 
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
@@ -1446,39 +1464,31 @@ renderClosureHtmlRow selectedPath thisPath expanded selected closureDesc =
           toHtml $ if expanded then "+" else "-" :: String
       a_ [href_ ("/connect?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderClosureHtml closureDesc
 
-renderProfileHtml :: ProfileLine -> Html ()
-renderProfileHtml (ProfileLine k kargs c) = div_ [class_ "profile-line-row"] $ do
-  li_ $ toHtml $ GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs kargs
-renderProfileHtml _ = error "profile line: not implemented"
+
 {-
-
-renderProfileLine :: ProfileLine -> [Widget Name]
-renderProfileLine (ClosureLine c) = renderInlineClosureDesc c
-renderProfileLine (ProfileLine k kargs c) =
- [txt (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs kargs), txt " ",  showLine c]
-  where
-    showLine :: CensusStats -> Widget Name
-    showLine (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _) =
-      hBox
-        [ withFontColor totalSizeColor $ str (show s),  vSpace
-        , withFontColor countColor $ str (show n),  vSpace
-        , withFontColor sizeColor $ str (show mn), vSpace
-        , withFontColor avgSizeColor $ str (Numeric.showFFloat @Double (Just 1) (fromIntegral s / fromIntegral n) "")
-        ]
-
-    withFontColor color = modifyDefAttr (flip Vty.withForeColor color)
-
-    totalSizeColor = Vty.RGBColor 0x26 0x83 0xDE
-    countColor = Vty.RGBColor 0xDE 0x66 0x26
-    sizeColor = Vty.RGBColor 0x26 0xDE 0xD7
-    avgSizeColor = Vty.RGBColor 0xAB 0x4D 0xE0
-
-
-
+renderHeaderPane (ProfileLine k args (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _)) = vBox $
+          [ txtLabel "Label      " <+> vSpace <+> txt (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args)
+          ]
+          <>
+          (case k of
+            GDP.ProfileConstrDesc desc ->
+              [ txtLabel "Package    " <+> vSpace <+> (txt (GDP.pkgsText desc))
+              , txtLabel "Module     " <+> vSpace <+> (txt (GDP.modlText desc))
+              , txtLabel "Constructor" <+> vSpace <+> (txt (GDP.nameText desc))
+              ]
+            _ -> []
+              )
+          <>
+          [ txtLabel "Count      " <+> vSpace <+> str (show n)
+          , txtLabel "Size       " <+> vSpace <+> renderBytes s
+          , txtLabel "Max        " <+> vSpace <+> renderBytes mn
+          , txtLabel "Average    " <+> vSpace <+> renderBytes @Double (fromIntegral s / fromIntegral n)
+          ]
 -}
 
-renderProfileHtmlRow :: [Int] -> [Int] -> Bool -> Bool -> ProfileLine -> Html ()
-renderProfileHtmlRow selectedPath thisPath expanded selected closureDesc =
+
+detailedRowHtml :: (a -> Html ()) -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
+detailedRowHtml renderHtml selectedPath thisPath expanded selected obj =
   let depth = length thisPath
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
@@ -1492,8 +1502,17 @@ renderProfileHtmlRow selectedPath thisPath expanded selected closureDesc =
          input_ [type_ "hidden", name_ "selected", value_ selectedStr]
          button_ [type_ "submit", class_ "expand-button"] $
            toHtml $ if expanded then "+" else "-" :: String
-       a_ [href_ ("/connectP?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderProfileHtml closureDesc
+       a_ [href_ ("/profile?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderHtml obj
 
+
+renderProfileHtml :: ProfileLine -> Html ()
+renderProfileHtml (ClosureLine c) = renderClosureHtml c 
+renderProfileHtml (ProfileLine k kargs c) = div_ [class_ "profile-line-row"] $ do
+  li_ $ toHtml $ GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs kargs <> " " <> showLine c
+  where showLine (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _) =
+          pack (show s ++ " " ++ show n ++ " " ++ show mn ++ " " ++
+                (Numeric.showFFloat @Double (Just 1) (fromIntegral s / fromIntegral n) ""))
+renderProfileHtml _ = error "Profile line: not implemented"
 
 
 renderSourceInfoSummary :: SourceInformation -> Html ()
@@ -1606,6 +1625,7 @@ toggleSelected :: Eq a => [a] -> [a] -> [a]
 toggleSelected selectedPath togglePath
   | sLen <= tLen = selectedPath
   | take tLen selectedPath == togglePath = togglePath  
+  | otherwise = selectedPath
   where sLen = length selectedPath
         tLen = length togglePath
 
@@ -1632,6 +1652,17 @@ buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
                                   "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
   where nids@((sn, sid):rest) = zipWith (\n i -> (n,i)) nodes [1..]
 
+autoScrollScript = script_ $ mconcat
+                     [ "window.addEventListener('beforeunload', () => {"
+                     , "sessionStorage.setItem('scrollY', window.scrollY);"
+                     , "});"
+                     , "window.addEventListener('load', () => {"
+                     , "const scrollY = sessionStorage.getItem('scrollY');"
+                     , "if (scrollY !== null) window.scrollTo(0, parseInt(scrollY, 10));"
+                     , "});"
+                     ]
+
+
 svgPath :: String
 svgPath = "tmp/graph.svg"
 
@@ -1641,6 +1672,18 @@ app appStateRef = do
   Scotty.get "/graph" $ do
     Scotty.setHeader "Content-Type" "image/svg+xml"
     Scotty.file svgPath
+  {- Serves the profile dump file -}
+  Scotty.get "/download-profile" $ do
+    let filePath = "profile_dump"
+    fileExists <- liftIO $ doesFileExist filePath
+    if fileExists
+      then do
+        Scotty.setHeader "Content-Type" "application/octet-stream"
+        Scotty.setHeader "Content-Disposition" "attachment; filename=\"profile_dump\""
+        Scotty.file filePath
+      else
+        Scotty.text "Profile dump not found."
+
 
   {- Main page where sockets/snapshots can be selected for debugging -}
   Scotty.get "/" $ do
@@ -1778,11 +1821,21 @@ app appStateRef = do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected socket debuggee (PausedMode os) -> do
-        let tree = _treeSavedAndGCRoots os
-        newTree <- liftIO $ toggleTreeByPath tree toggleIx
-        let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
-        liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
+        case _treeMode os of
+          SavedAndGCRoots _ -> do 
+            let tree = _treeSavedAndGCRoots os
+            newTree <- liftIO $ toggleTreeByPath tree toggleIx
+            let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
+          SearchedHtml f tree s -> do
+            newTree <- liftIO $ toggleTreeByPath tree toggleIx
+            let newOs = os { _treeMode = SearchedHtml f newTree s }
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect $ "/profile?selected=" <> TL.fromStrict selectedStr
+
       _ -> Scotty.redirect "/"
   {- Creates and displays the graph for the selected object -}
   Scotty.post "/img" $ do
@@ -1807,6 +1860,13 @@ app appStateRef = do
   {- View profile (level 1) -}
   Scotty.get "/profile" $ do
     state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        Scotty.html $ renderProfilePage selectedPath mode
+  Scotty.post "/profile" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
       Connected socket debuggee mode ->
         case mode of
@@ -1829,8 +1889,22 @@ app appStateRef = do
                     return (show i, filledC)
                   mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee (pack lbl) filledItem) filled
             let tree = mkIOTree debuggee sortedProfiles gChildren renderProfileLine id
-            Scotty.html $ renderProfilePage tree totalStats
-    
+            let newOs = os { _treeMode = SearchedHtml renderProfileHtml tree totalStats }
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.html $ renderProfilePage selectedPath (_mode newMajorState)
+  Scotty.post "/reconnect" $ do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        case mode of
+          PausedMode os -> do
+            let newOs = os { _treeMode = SavedAndGCRoots undefined }
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect "/connect"
 
 
   where mkSavedAndGCRootsIOTree debuggee' = do

@@ -17,6 +17,7 @@ module Model
 
 import Network.Socket as NS
 import Control.Exception (try, SomeException)
+import Lucid
 
 import Data.Maybe (fromMaybe)
 import Data.Sequence as Seq
@@ -145,6 +146,7 @@ data ClosureDetails = ClosureDetails
 data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
               | Retainer (ClosureDetails -> Widget Name) (IOTree (ClosureDetails) Name)
               | forall a . Searched (a -> Widget Name) (IOTree a Name)
+              | forall a . SearchedHtml (a -> Html ()) (IOTree a Name) CensusStats
 
 treeLength :: TreeMode -> Maybe Int
 treeLength (SavedAndGCRoots {}) = Nothing
