@@ -427,7 +427,7 @@ flattenTreeHtml _ _ [] _ _ = []
 flattenTreeHtml depth minorIx (IOTreeNode node' csE : ns) selection parentPath =
   case csE of
     Left _ -> RenderNode (row Collapsed) [] : rest
-    Right cs -> RenderNode (row (Expanded $ null cs)) 
+    Right cs -> RenderNode (row (Expanded True)) 
                   (flattenTreeHtml (rowCtx : depth) 0 cs 
                       (if childIsSelected then drop 1 selection else []) thisPath)
                   : rest
@@ -531,7 +531,7 @@ expandNodeWithCap cap n format = do
                            return (IOTreeNode node (Right newCs'), seen')
     processChildren seen [] = return ([], seen)
     processChildren seen (c:cs)
-      | cap == Set.size seen = return ([]{-c:cs-}, seen)
+      | cap == Set.size seen = return ([], seen)
       | otherwise = do
           (c', seen') <- go seen c
           (cs', seen'') <- processChildren seen' cs

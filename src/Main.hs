@@ -1332,9 +1332,9 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     form_ [method_ "post", action_ "/pause"] $ 
       button_ "Pause process" 
   PausedMode os -> do
-    {-div_ [style_ "position: absolute; top: 50px; right: 10px;"] $
+    div_ [style_ "position: absolute; top: 50px; right: 10px;"] $
       form_ [method_ "get", action_ "/profile"] $
-        button_ [type_ "submit"] "View profile"-}
+        button_ [type_ "submit"] "View profile"
     let tree = _treeSavedAndGCRoots os
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
     form_ [method_ "post", action_ "/resume"] $
@@ -1410,6 +1410,12 @@ renderImgPage name selectedPath capped =
                 ] "Download SVG"
       img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
 
+renderProfilePage :: (Ord name, Show name) => IOTree ProfileLine name -> CensusStats -> TL.Text
+renderProfilePage tree stats =
+  renderText $ do
+    h1_ "profile page here"
+    renderIOTreeHtml tree [] renderProfileHtmlRow    
+
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ _labelInParent info <> " | " <> pack (closureShowAddress closure) <> " | " <> _pretty info 
@@ -1431,13 +1437,63 @@ renderClosureHtmlRow selectedPath thisPath expanded selected closureDesc =
       styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
       pathStr = encodePath thisPath
       selectedStr = encodePath selectedPath
+      linkStyle = "color: " ++ (if selected then "purple" else "blue") ++ "; text-decoration: none;"
   in div_ [class_ classStr, styleAttr] $ do
       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
         input_ [type_ "hidden", name_ "selected", value_ selectedStr]
         button_ [type_ "submit", class_ "expand-button"] $ 
           toHtml $ if expanded then "+" else "-" :: String
-      a_ [href_ ("/connect?selected=" <> pathStr)] $ renderClosureHtml closureDesc
+      a_ [href_ ("/connect?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderClosureHtml closureDesc
+
+renderProfileHtml :: ProfileLine -> Html ()
+renderProfileHtml (ProfileLine k kargs c) = div_ [class_ "profile-line-row"] $ do
+  li_ $ toHtml $ GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs kargs
+renderProfileHtml _ = error "profile line: not implemented"
+{-
+
+renderProfileLine :: ProfileLine -> [Widget Name]
+renderProfileLine (ClosureLine c) = renderInlineClosureDesc c
+renderProfileLine (ProfileLine k kargs c) =
+ [txt (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs kargs), txt " ",  showLine c]
+  where
+    showLine :: CensusStats -> Widget Name
+    showLine (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _) =
+      hBox
+        [ withFontColor totalSizeColor $ str (show s),  vSpace
+        , withFontColor countColor $ str (show n),  vSpace
+        , withFontColor sizeColor $ str (show mn), vSpace
+        , withFontColor avgSizeColor $ str (Numeric.showFFloat @Double (Just 1) (fromIntegral s / fromIntegral n) "")
+        ]
+
+    withFontColor color = modifyDefAttr (flip Vty.withForeColor color)
+
+    totalSizeColor = Vty.RGBColor 0x26 0x83 0xDE
+    countColor = Vty.RGBColor 0xDE 0x66 0x26
+    sizeColor = Vty.RGBColor 0x26 0xDE 0xD7
+    avgSizeColor = Vty.RGBColor 0xAB 0x4D 0xE0
+
+
+
+-}
+
+renderProfileHtmlRow :: [Int] -> [Int] -> Bool -> Bool -> ProfileLine -> Html ()
+renderProfileHtmlRow selectedPath thisPath expanded selected closureDesc =
+  let depth = length thisPath
+      indentPx = depth * 20
+      classStr = "tree-row" <> if selected then " selected" else ""
+      styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
+      pathStr = encodePath thisPath
+      selectedStr = encodePath selectedPath
+      linkStyle = "color: " ++ (if selected then "purple" else "blue") ++ "; text-decoration: none;"
+  in div_ [class_ classStr, styleAttr] $ do
+       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
+         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
+         input_ [type_ "hidden", name_ "selected", value_ selectedStr]
+         button_ [type_ "submit", class_ "expand-button"] $
+           toHtml $ if expanded then "+" else "-" :: String
+       a_ [href_ ("/connectP?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderProfileHtml closureDesc
+
 
 
 renderSourceInfoSummary :: SourceInformation -> Html ()
@@ -1565,20 +1621,16 @@ readParam name getParam f def = do
 selectedParam getParam = readParam "selected" getParam parsePath "0"
 togglePathParam getParam = readParam "toggle" getParam parsePath ""
 
-myGraph :: [Int] -> Data.GraphViz.Types.Generalised.DotGraph Int
-myGraph selectedPath = digraph (Str "Example") $ do
-  node 1 [toLabel (("start" <> encodePath selectedPath) :: Text)]
-  node 2 [toLabel ("end" :: Text)]
-  edge 1 2 []
-
 buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
+  -- possible style for source node, except this logic doesn't always select the source node
+  --node sid [toLabel (pack sn :: Text), Data.GraphViz.style filled, fillColor Yellow, color Red]
   mapM_ (\(n, nid) -> node nid [toLabel (pack n :: Text)]) nids
   mapM_ (\(a, b) -> case (lookup a nids, lookup b nids) of
                       (Just x, Just y) -> edge x y []
                       z -> error ("Error in building closure graph: " ++ 
                                   "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
-  where nids = zipWith (\n i -> (n,i)) nodes [1..]
+  where nids@((sn, sid):rest) = zipWith (\n i -> (n,i)) nodes [1..]
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1752,7 +1804,33 @@ app appStateRef = do
               _ <- runGraphviz graph Svg svgPath
               return ()
             Scotty.html $ renderImgPage name selectedPath capped
-
+  {- View profile (level 1) -}
+  Scotty.get "/profile" $ do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        case mode of
+          PausedMode os -> do
+            profMap <- liftIO $ profile debuggee OneLevel "profile_dump" 
+            let sortedProfiles = Prelude.reverse $
+                  [ ProfileLine k kargs v
+                  | ((k, kargs), v) <- List.sortBy (comparing (cssize . snd)) (M.toList profMap)
+                  ]
+                totalStats = foldMap snd (M.toList profMap)
+            
+                gChildren _ (ClosureLine c) = map ClosureLine <$> getChildren debuggee c
+                gChildren _ (ProfileLine _ _ stats) = do
+                  let samples = getSamples (sample stats)
+                  closures <- forM samples $ \ptr -> do
+                    deref <- run debuggee $ GD.dereferenceClosure ptr
+                    return $ ListFullClosure $ Closure ptr deref
+                  filled <- forM (zip [0 :: Int ..] closures) $ \(i, c) -> do
+                    filledC <- fillListItem debuggee c
+                    return (show i, filledC)
+                  mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee (pack lbl) filledItem) filled
+            let tree = mkIOTree debuggee sortedProfiles gChildren renderProfileLine id
+            Scotty.html $ renderProfilePage tree totalStats
+    
 
 
   where mkSavedAndGCRootsIOTree debuggee' = do
