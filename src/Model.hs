@@ -146,7 +146,7 @@ data ClosureDetails = ClosureDetails
 data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
               | Retainer (ClosureDetails -> Widget Name) (IOTree (ClosureDetails) Name)
               | forall a . Searched (a -> Widget Name) (IOTree a Name)
-              | forall a . SearchedHtml (a -> Html (), a -> Html ()) (IOTree a Name)
+              | forall a . SearchedHtml (a -> Html (), a -> Html ()) (IOTree a Name) String
 
 treeLength :: TreeMode -> Maybe Int
 treeLength (SavedAndGCRoots {}) = Nothing
