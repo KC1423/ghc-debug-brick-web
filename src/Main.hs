@@ -987,15 +987,25 @@ dispatchFooterInput :: Debuggee
                     -> FooterInputMode
                     -> Form Text () Name
                     -> EventM n OperationalState ()
+-- Incomplete
 dispatchFooterInput dbg (FClosureAddress runf invert) form   = filterOrRun dbg form runf readClosurePtr (pure . UIAddressFilter invert)
+-- Incomplete
 dispatchFooterInput dbg (FInfoTableAddress runf invert) form = filterOrRun dbg form runf readInfoTablePtr (pure . UIInfoAddressFilter invert)
+-- Incomplete
 dispatchFooterInput dbg (FConstructorName runf invert) form  = filterOrRun dbg form runf Just (pure . UIConstructorFilter invert)
+-- Incomplete
 dispatchFooterInput dbg (FClosureName runf invert) form      = filterOrRun dbg form runf Just (pure . UIInfoNameFilter invert)
+-- Incomplete
 dispatchFooterInput dbg FArrWordsSize form                  = filterOrRun dbg form True readMaybe (\size -> [UIClosureTypeFilter False Debug.ARR_WORDS, UISizeFilter False size])
+-- Incomplete
 dispatchFooterInput dbg (FFilterEras runf invert) form       = filterOrRun dbg form runf (parseEraRange . T.pack) (pure . UIEraFilter invert)
+-- Incomplete
 dispatchFooterInput dbg (FFilterClosureSize invert) form = filterOrRun dbg form False readMaybe (pure . UISizeFilter invert)
+-- Incomplete
 dispatchFooterInput dbg (FFilterClosureType invert) form = filterOrRun dbg form False readMaybe (pure . UIClosureTypeFilter invert)
+-- Incomplete
 dispatchFooterInput dbg (FFilterCcId runf invert) form = filterOrRun dbg form runf readMaybe (pure . UICcId invert)
+-- DONE
 dispatchFooterInput dbg (FProfile lvl) form = do
    outside_os <- get
 
@@ -1043,6 +1053,7 @@ dispatchFooterInput dbg (FProfile lvl) form = do
     put (os & resetFooter
             & treeMode .~ Searched renderWithStats tree
         )
+-- DONE (although consider making this accessible from profile page etc.)
 dispatchFooterInput _ FDumpArrWords form = do
    os <- get
    let act node = asyncAction_ "dumping ARR_WORDS payload" os $
@@ -1054,6 +1065,7 @@ dispatchFooterInput _ FDumpArrWords form = do
       Retainer _ iotree -> act (ioTreeSelection iotree)
       SavedAndGCRoots _ -> act (ioTreeSelection (view treeSavedAndGCRoots os))
       Searched {} -> put (os & footerMessage "Dump for search mode not implemented yet")
+-- Incomplete
 dispatchFooterInput _ FSetResultSize form = do
    outside_os <- get
    asyncAction "setting result size" outside_os (pure ()) $ \() -> do
@@ -1063,6 +1075,7 @@ dispatchFooterInput _ FSetResultSize form = do
          | n <= 0 -> put (os & resultSize .~ Nothing)
          | otherwise -> put (os & resultSize .~ (Just n))
        Nothing -> pure ()
+-- Incomplete
 dispatchFooterInput dbg FSnapshot form = do
    os <- get
    asyncAction_ "Taking snapshot" os $ snapshot dbg (T.unpack (formState form))
@@ -1331,17 +1344,17 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     form_ [method_ "post", action_ "/pause"] $ 
       button_ "Pause process" 
   PausedMode os -> do
-    div_ [style_ "position: absolute; top: 50px; right: 10px;"] $
-      form_ [method_ "post", action_ "/profile"] $
-        button_ [type_ "submit"] "View profile"
-     
-    {-div_ [style_ "position: absolute; top: 50px; right: 10px;"] $
-      form_ [method_ "post", action_ "/profile", style_ "display: flex; align-items: center; gap: 8px;"] $ do
+    div_ [style_ "position: absolute; top: 50px; right: 10px;"] $ do
+      form_ [ method_ "post", action_ "/profile"
+            , style_ "display: flex; align-items: center; gap: 8px;"] $ do
         button_ [type_ "submit"] (toHtml ("View profile" :: Text))
-        select_ [name_ "profileView"] $ do
-          option_ [value_ "summary"] (toHtml ("Summary" :: Text))
-          option_ [value_ "detailed"] (toHtml ("Detailed" :: Text))
-          option_ [value_ "raw"] (toHtml ("Raw" :: Text))   -}
+        select_ [name_ "profileLevel"] $ do
+          option_ [value_ "1"] (toHtml ("Level one" :: Text))
+          option_ [value_ "2"] (toHtml ("Level two" :: Text))
+      {-form_ [ method_ "post", action_ "/arrWordsCount"
+            , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+        button_ [type_ "submit"] "View ARR_WORDS count"-}
+
     let tree = _treeSavedAndGCRoots os
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
     form_ [method_ "post", action_ "/resume"] $
@@ -1377,17 +1390,19 @@ renderSummary tree path =
         li_ $ do
           strong_ "Exclusive size: "
           toHtml (show (getSize excSize) <> "B")
-      LabelNode n -> do
-        li_ $ toHtml n
-      InfoDetails info -> do
-        renderInfoSummary info
+        case node of 
+          ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} ->
+            li_ $ a_ [href_ ("/dumpArrWords?selected=" <> encodePath path)] "Dump ARR_WORDS payload"
+          _ -> mempty
+        
+      LabelNode n -> li_ $ toHtml n
+      InfoDetails info -> renderInfoSummary info
       CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
         li_ $ do 
           strong_ "ID: "
           toHtml (show ccsID) 
         renderCC ccsCc
-      CCDetails _ c -> do
-        renderCC c
+      CCDetails _ c -> renderCC c
 
 renderClosureSummary :: ClosureDetails -> Html ()
 renderClosureSummary node =
@@ -1649,6 +1664,10 @@ parsePath :: String -> [Int]
 parsePath [] = []
 parsePath s = map read $ splitOn "." s
 
+parseProfileLevel :: String -> ProfileLevel
+parseProfileLevel "1" = OneLevel
+parseProfileLevel "2" = TwoLevel  
+
 unquote :: String -> String
 unquote ('\"':xs) | last xs == '\"' = init xs
 unquote xs = xs
@@ -1678,6 +1697,7 @@ readParam name getParam f def = do
 
 selectedParam getParam = readParam "selected" getParam parsePath "0"
 togglePathParam getParam = readParam "toggle" getParam parsePath ""
+profileLevelParam getParam = readParam "profileLevel" getParam parseProfileLevel "1" 
 
 buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
@@ -1909,7 +1929,8 @@ app appStateRef = do
       Connected socket debuggee mode ->
         case mode of
           PausedMode os -> do
-            profMap <- liftIO $ profile debuggee OneLevel "profile_dump" 
+            level <- profileLevelParam Scotty.formParam
+            profMap <- liftIO $ profile debuggee level "profile_dump" 
             let sortedProfiles = Prelude.reverse $
                   [ ProfileLine k kargs v
                   | ((k, kargs), v) <- List.sortBy (comparing (cssize . snd)) (M.toList profMap)
@@ -1943,6 +1964,107 @@ app appStateRef = do
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/connect"
+  {- Downloads the arr_words payload -}
+  Scotty.get "/dumpArrWords" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        case mode of
+          PausedMode os -> do
+            let tree = _treeSavedAndGCRoots os
+            let (IOTreeNode node _) = getSubTree tree selectedPath
+            case node of 
+              ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} -> do
+                let payload = arrWordsBS (take (fromIntegral bytes) arrWords)
+                Scotty.setHeader "Content-Type" "application/octet-stream"
+                Scotty.setHeader "Content-Disposition" "attachment; filename=\"closure.bin\""
+                Scotty.raw payload
+              _ -> error "Error dumping arr_words payload"
+  {- See arr_words count -}
+  {-Scotty.post "/arrWordsCount" $ do
+    --Scotty.html $ renderText $ h1_ "display arr_words count"
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        case mode of
+          PausedMode os -> do
+            --profMap <- liftIO $ profile debuggee level "profile_dump" 
+            arrMap <- liftIO $ arrWordsAnalysis Nothing debuggee
+            let all_res = Prelude.reverse $ 
+                  [ (k, S.toList v ) 
+                  | (k, v) <- (List.sortBy (comparing 
+                                           (\(k, v) -> fromIntegral (BS.length k) * S.size v)) 
+                                           (M.toList arrMap))
+                  ]
+                display_res = maybe id take (_resultSize os) all_res
+                top_closure = [CountLine k (fromIntegral (BS.length k)) (length v) | (k, v) <- display_res]
+
+                -- histogram return Widget, not Html
+                -- !words_histogram = histogram 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
+                
+                g_children d (CountLine b _ _) = do
+                  let Just cs = M.lookup b arrMap
+                  cs' <- run debuggee $ forM (S.toList cs) $ \c -> do
+                    c' <- GD.dereferenceClosure c
+                    return $ ListFullClosure $ Closure c c'
+                  children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
+                  mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
+                g_children d (FieldLine c) = map FieldLine <$> getChildren d c
+
+                renderArrWords = undefined
+                renderWithHistogram = undefined
+                tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
+              --put (outside_os & resetFooter
+              --        & treeMode .~ Searched renderWithHistogram tree
+              --    )
+                     
+            Scotty.html $ renderText $ h1_ "blah"--renderProfilePage selectedPath (_mode newMajorState)
+-}
+{-
+arrWordsAction :: Debuggee -> EventM n OperationalState ()
+arrWordsAction dbg = do
+  outside_os <- get
+  asyncAction "Counting ARR_WORDS" outside_os (arrWordsAnalysis Nothing dbg) $ \res -> do
+    os <- get
+    let all_res = Prelude.reverse [(k, S.toList v ) | (k, v) <- (List.sortBy (comparing (\(k, v) -> fromIntegral (BS.length k) * S.size v)) (M.toList res))]
+
+        display_res = maybe id take (_resultSize os) all_res
+
+        top_closure = [CountLine k (fromIntegral (BS.length k)) (length v) | (k, v) <- display_res]
+
+        !words_histogram = histogram 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
+
+        g_children d (CountLine b _ _) = do
+          let Just cs = M.lookup b res
+          cs' <- run dbg $ forM (S.toList cs) $ \c -> do
+            c' <- GD.dereferenceClosure c
+            return $ ListFullClosure $ Closure c c'
+          children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
+          mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
+        g_children d (FieldLine c) = map FieldLine <$> getChildren d c
+
+        renderHeaderPane (CountLine b l n) = vBox
+          [ labelled "Count"      $ vLimit 1 $ str (show n)
+          , labelled "Size"       $ vLimit 1 $ renderBytes l
+          , labelled "Total Size" $ vLimit 1 $ renderBytes (n * l)
+          , strWrap (take 100 $ show b)
+          ]
+        renderHeaderPane (FieldLine c) = renderClosureDetails c
+
+        renderWithHistogram c = joinBorders (renderHeaderPane c <+>
+          (padRight (Pad 1) $ (padLeft Brick.Max $ borderWithLabel (txt "Histogram") $ hLimit 100 $ words_histogram)))
+
+        tree = mkIOTree dbg top_closure g_children renderArrWordsLines id
+    put (outside_os & resetFooter
+            & treeMode .~ Searched renderWithHistogram tree
+        )
+
+
+
+
+ - -}
 
 
   where mkSavedAndGCRootsIOTree debuggee' = do
