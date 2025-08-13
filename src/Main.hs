@@ -297,11 +297,10 @@ renderCCPayload Debug.CCPayload{..} =
   , labelled "Is CAF" $ vLimit 1 (str $ show ccIsCaf)
   ]
 
--- STATUS: Incomplete (unsure)
+-- STATUS: Done
 renderBytes :: Real a => a -> Widget n
 renderBytes n =
   str (getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes)))
-
 
 -- STATUS: Incomplete (not started)
 footer :: Int -> Maybe Int -> FooterMode -> Widget Name
@@ -1335,6 +1334,14 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     div_ [style_ "position: absolute; top: 50px; right: 10px;"] $
       form_ [method_ "post", action_ "/profile"] $
         button_ [type_ "submit"] "View profile"
+     
+    {-div_ [style_ "position: absolute; top: 50px; right: 10px;"] $
+      form_ [method_ "post", action_ "/profile", style_ "display: flex; align-items: center; gap: 8px;"] $ do
+        button_ [type_ "submit"] (toHtml ("View profile" :: Text))
+        select_ [name_ "profileView"] $ do
+          option_ [value_ "summary"] (toHtml ("Summary" :: Text))
+          option_ [value_ "detailed"] (toHtml ("Detailed" :: Text))
+          option_ [value_ "raw"] (toHtml ("Raw" :: Text))   -}
     let tree = _treeSavedAndGCRoots os
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
     form_ [method_ "post", action_ "/resume"] $
@@ -1382,13 +1389,59 @@ renderSummary tree path =
       CCDetails _ c -> do
         renderCC c
 
-{-
-renderProfileSummary tree path =
+renderClosureSummary :: ClosureDetails -> Html ()
+renderClosureSummary node =
+  case node of
+    ClosureDetails c excSize info -> do 
+      renderInfoSummary info
+      li_ $ do
+        strong_ "Exclusive size: "
+        toHtml (show (getSize excSize) <> "B")
+    LabelNode n -> do
+      li_ $ toHtml n
+    InfoDetails info -> do
+      renderInfoSummary info
+    CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
+      li_ $ do 
+        strong_ "ID: "
+        toHtml (show ccsID) 
+      renderCC ccsCc
+    CCDetails _ c -> do
+      renderCC c
+
+detailedSummary :: (Ord name, Show name) => (a -> Html ()) -> IOTree a name -> [Int] -> Html ()
+detailedSummary f tree path =
   div_ [class_ "profile-summary"] $ do
-    let (IOTree node _) = getSubTree tree path
-    h3_ "Details"
-    case Node of  
--}
+    let (IOTreeNode node _) = getSubTree tree path
+    f node
+
+renderProfileSummary :: CensusStats -> ProfileLine -> Html ()
+renderProfileSummary totalStats line = do
+  div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
+    -- Left column: Line summary
+    div_ [ style_ "flex: 1;" ] $ do
+      h3_ "Selection: "
+      ul_ $ renderLineSummary line
+
+    -- Right column: Total stats
+    div_ [ style_ "flex: 1;" ] $ do
+      h3_ "Total: "
+      ul_ $ renderLineSummary (ProfileLine (GDP.ProfileClosureDesc "Total") GDP.NoArgs totalStats)
+  where 
+    renderLineSummary (ClosureLine cs) = renderClosureSummary cs
+    renderLineSummary (ProfileLine k args (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _)) = do
+      li_ $ strong_ "Label: " >> toHtml (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args) 
+      case k of
+        GDP.ProfileConstrDesc desc -> do
+          li_ $ strong_ "Package: " >> toHtml (GDP.pkgsText desc)
+          li_ $ strong_ "Module: " >> toHtml (GDP.modlText desc)
+          li_ $ strong_ "Constructor: " >> toHtml (GDP.nameText desc)
+        _ -> mempty
+      li_ $ strong_ "Count: " >> toHtml (show n)
+      li_ $ strong_ "Size: " >> toHtml (renderBytesHtml s)
+      li_ $ strong_ "Max: " >> toHtml (renderBytesHtml mn)
+      li_ $ strong_ "Average: " >> toHtml (renderBytesHtml @Double (fromIntegral s / fromIntegral n))
+  
 
 renderIncSize :: Int -> Bool -> [Int] -> Html ()
 renderIncSize incSize capped selectedPath = do 
@@ -1422,15 +1475,16 @@ renderProfilePage :: [Int] -> ConnectedMode -> TL.Text
 renderProfilePage selectedPath mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
-      SearchedHtml renderFn tree stats -> do
+      SearchedHtml (renderRow, renderSummary') tree -> do
         h1_ "Profile"
         div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
           button_ [ type_ "submit"
                   , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
                   ] "Return to saved objects and GC roots"
         div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
-        --renderProfileSummary tree selectedPath 
-        renderIOTreeHtml tree selectedPath (detailedRowHtml renderFn)
+        detailedSummary renderSummary' tree selectedPath--renderProfileSummary --tree selectedPath 
+        h3_ "Results"
+        renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow)
         autoScrollScript
 
 
@@ -1465,26 +1519,7 @@ renderClosureHtmlRow selectedPath thisPath expanded selected closureDesc =
       a_ [href_ ("/connect?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderClosureHtml closureDesc
 
 
-{-
-renderHeaderPane (ProfileLine k args (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _)) = vBox $
-          [ txtLabel "Label      " <+> vSpace <+> txt (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args)
-          ]
-          <>
-          (case k of
-            GDP.ProfileConstrDesc desc ->
-              [ txtLabel "Package    " <+> vSpace <+> (txt (GDP.pkgsText desc))
-              , txtLabel "Module     " <+> vSpace <+> (txt (GDP.modlText desc))
-              , txtLabel "Constructor" <+> vSpace <+> (txt (GDP.nameText desc))
-              ]
-            _ -> []
-              )
-          <>
-          [ txtLabel "Count      " <+> vSpace <+> str (show n)
-          , txtLabel "Size       " <+> vSpace <+> renderBytes s
-          , txtLabel "Max        " <+> vSpace <+> renderBytes mn
-          , txtLabel "Average    " <+> vSpace <+> renderBytes @Double (fromIntegral s / fromIntegral n)
-          ]
--}
+
 
 
 detailedRowHtml :: (a -> Html ()) -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
@@ -1596,6 +1631,9 @@ getClosureVizTree nodes edges (IOTreeNode n csE) =
                let (ns', es') = f nsAcc [] x
                in (ns', esAcc ++ es')) (ns, es) xs
 getClosureVizTree nodes edges _ = (nodes, edges)
+
+renderBytesHtml :: Real a => a -> String
+renderBytesHtml n = getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes))
 
 closureFormat :: ClosureDetails -> String
 closureFormat (ClosureDetails clo _ inf) = closureShowAddress clo ++ "\n" ++ takeWhile (/=' ') (unquote (show (_pretty inf)))
@@ -1828,9 +1866,9 @@ app appStateRef = do
             let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
-          SearchedHtml f tree s -> do
+          SearchedHtml f tree -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newOs = os { _treeMode = SearchedHtml f newTree s }
+            let newOs = os { _treeMode = SearchedHtml f newTree }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
@@ -1889,7 +1927,7 @@ app appStateRef = do
                     return (show i, filledC)
                   mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee (pack lbl) filledItem) filled
             let tree = mkIOTree debuggee sortedProfiles gChildren renderProfileLine id
-            let newOs = os { _treeMode = SearchedHtml renderProfileHtml tree totalStats }
+            let newOs = os { _treeMode = SearchedHtml (renderProfileHtml, renderProfileSummary totalStats) tree }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
