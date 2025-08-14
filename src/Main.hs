@@ -896,7 +896,7 @@ arrWordsAction dbg = do
 
 data ThunkLine = ThunkLine (Maybe SourceInformation) Count
 
--- STATUS: Incomplete
+-- STATUS: Done
 thunkAnalysisAction :: Debuggee -> EventM n OperationalState ()
 thunkAnalysisAction dbg = do
   outside_os <- get
@@ -1357,6 +1357,10 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
       form_ [ method_ "post", action_ "/stringsCount"
             , style_ "display: flex; align-items: center; gap: 8px;"] $ do
         button_ [type_ "submit"] "View strings count"
+      form_ [ method_ "post", action_ "/thunkAnalysis"
+            , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+        button_ [type_ "submit"] "View thunk analysis"
+
 
     let tree = _treeSavedAndGCRoots os
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
@@ -1460,7 +1464,6 @@ renderProfileSummary totalStats line = do
       li_ $ strong_ "Max: " >> toHtml (renderBytesHtml mn)
       li_ $ strong_ "Average: " >> toHtml (renderBytesHtml @Double (fromIntegral s / fromIntegral n))
   
-
 renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> Html ()
 renderCountSummary mh line = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
@@ -1483,8 +1486,19 @@ renderCountSummary mh line = do
         li_ $ strong_ "Count: " >> toHtml (show n)
         li_ $ strong_ "Size: " >> toHtml (renderBytesHtml l)
         li_ $ strong_ "Total size: " >> toHtml (renderBytesHtml $ n * l)
-        li_ $ toHtml $ take 30 (show b) ++ (if length (show b) > 30 then "..." else "")
+        li_ $ toHtml (show b)
       renderLineSummary (FieldLine c) = renderClosureSummary c
+
+renderThunkAnalysisSummary :: ThunkLine -> Html ()
+renderThunkAnalysisSummary (ThunkLine msc c) = do
+  h3_ "Selection: "
+  case msc of
+    Nothing -> toHtml ("NoLoc" :: Text)
+    Just sc -> renderSourceInfoSummary sc
+  li_ $ strong_ "Count: " >> toHtml (show $ getCount c)
+
+
+
 
 renderIncSize :: Int -> Bool -> [Int] -> Html ()
 renderIncSize incSize capped selectedPath = do 
@@ -1540,6 +1554,21 @@ renderCountPage title selectedPath mode = renderText $ case mode of
           button_ [ type_ "submit"
                   , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
                   ] "Return to saved objects and GC roots"
+        detailedSummary renderSummary' tree selectedPath
+        h3_ "Results"
+        renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
+        autoScrollScript
+
+renderThunkAnalysisPage :: [Int] -> ConnectedMode -> TL.Text
+renderThunkAnalysisPage selectedPath mode = renderText $ case mode of
+  PausedMode os -> do
+    case _treeMode os of
+      SearchedHtml (renderRow, renderSummary') tree name -> do
+        h1_ "Thunk analysis"
+        div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
+	  button_ [ type_ "submit"
+	          , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
+		  ] "Return to saved objects and GC roots"
         detailedSummary renderSummary' tree selectedPath
         h3_ "Results"
         renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
@@ -1611,6 +1640,13 @@ renderCountHtml :: Show a => ArrWordsLine a -> Html ()
 renderCountHtml (CountLine k l n) = div_ [class_ "arr-count-row"] $ do
   li_ $ toHtml $ show n <> " " <> renderBytesHtml l <> " " <> (take 100 $ show k)
 renderCountHtml (FieldLine cd) = renderClosureHtml cd
+
+renderThunkAnalysisHtml :: ThunkLine -> Html ()
+renderThunkAnalysisHtml (ThunkLine msc (Count c)) =
+  li_ $ toHtml $ header <> " " <> show c
+  where header = case msc of
+                   Just sc -> infoPosition sc
+                   Nothing -> "NoLoc"
 
 renderSourceInfoSummary :: SourceInformation -> Html ()
 renderSourceInfoSummary (SourceInformation name cty ty label' modu loc) = do 
@@ -2109,7 +2145,6 @@ app appStateRef = do
         case mode of
           PausedMode os -> do
             stringMap <- liftIO $ stringsAnalysis Nothing debuggee
-            Scotty.html $ renderText $ h1_ "strings count"
             let sorted_res = maybe id take (_resultSize os) $ 
                              Prelude.reverse [(k, S.toList v ) 
                                              | (k, v) <- (List.sortBy (comparing (S.size . snd)) 
@@ -2132,7 +2167,30 @@ app appStateRef = do
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderCountPage "Strings" selectedPath (_mode newMajorState)
+  {- Thunk analysis -}
+  Scotty.get "/thunkAnalysis" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        Scotty.html $ renderThunkAnalysisPage selectedPath mode
+  Scotty.post "/thunkAnalysis" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        case mode of
+          PausedMode os -> do
+            thunkMap <- liftIO $ thunkAnalysis debuggee
+            let top_closure = Prelude.reverse [ ThunkLine k v | (k, v) <- (List.sortBy (comparing (getCount . snd)) (M.toList thunkMap))]
 
+                g_children _ (ThunkLine {}) = pure []
+            let tree = mkIOTree debuggee top_closure g_children undefined id
+            let newOs = os { _treeMode = SearchedHtml (renderThunkAnalysisHtml, renderThunkAnalysisSummary) tree "thunkAnalysis" }
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.html $ renderThunkAnalysisPage selectedPath (_mode newMajorState)
 
    
   where mkSavedAndGCRootsIOTree debuggee' = do
@@ -2142,7 +2200,6 @@ app appStateRef = do
           savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
           return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
-
 
 
 main :: IO ()
