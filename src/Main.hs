@@ -781,7 +781,7 @@ inputFooterHandler dbg m form _k re@(VtyEvent e) =
           zoom (lens (const form) (\ os form' -> set footerMode (FooterInput m form') os)) (handleFormEvent re)
 inputFooterHandler _ _ _ k re = k re
 
--- STATUS: Incomplete
+-- STATUS: Done
 stringsAction :: Debuggee -> EventM n OperationalState ()
 stringsAction dbg = do
   outside_os <- get
@@ -1354,6 +1354,9 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
       form_ [ method_ "post", action_ "/arrWordsCount"
             , style_ "display: flex; align-items: center; gap: 8px;"] $ do
         button_ [type_ "submit"] "View ARR_WORDS count"
+      form_ [ method_ "post", action_ "/stringsCount"
+            , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+        button_ [type_ "submit"] "View strings count"
 
     let tree = _treeSavedAndGCRoots os
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
@@ -1458,8 +1461,8 @@ renderProfileSummary totalStats line = do
       li_ $ strong_ "Average: " >> toHtml (renderBytesHtml @Double (fromIntegral s / fromIntegral n))
   
 
-renderArrCountSummary :: Show a => Html () -> ArrWordsLine a -> Html ()
-renderArrCountSummary histo line = do
+renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> Html ()
+renderCountSummary mh line = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1;" ] $ do
@@ -1467,9 +1470,12 @@ renderArrCountSummary histo line = do
       ul_ $ renderLineSummary line
 
     -- Right column: Histogram
-    div_ [ style_ "flex: 1;" ] $ do
-      h3_ "Histogram: "
-      ul_ $ histo
+    case mh of
+      Just histo -> 
+        div_ [ style_ "flex: 1;" ] $ do
+          h3_ "Histogram: "
+          ul_ $ histo
+      Nothing -> mempty
 
     where
       renderLineSummary :: Show a => ArrWordsLine a -> Html ()
@@ -1524,12 +1530,12 @@ renderProfilePage selectedPath mode = renderText $ case mode of
         renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
         autoScrollScript
 
-renderArrCountPage :: [Int] -> ConnectedMode -> TL.Text
-renderArrCountPage selectedPath mode = renderText $ case mode of
+renderCountPage :: String -> [Int] -> ConnectedMode -> TL.Text
+renderCountPage title selectedPath mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
       SearchedHtml (renderRow, renderSummary') tree name -> do
-        h1_ "ARR_WORDS Count"
+        h1_ $ toHtml $ title ++ " Count"
         div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
           button_ [ type_ "submit"
                   , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
@@ -1538,7 +1544,6 @@ renderArrCountPage selectedPath mode = renderText $ case mode of
         h3_ "Results"
         renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
         autoScrollScript
-
 
 
 renderClosureHtml :: ClosureDetails -> Html ()
@@ -1602,10 +1607,10 @@ renderProfileHtml (ProfileLine k kargs c) = div_ [class_ "profile-line-row"] $ d
                 (Numeric.showFFloat @Double (Just 1) (fromIntegral s / fromIntegral n) ""))
 renderProfileHtml _ = error "Profile line: not implemented"
 
-renderArrCountHtml :: Show a => ArrWordsLine a -> Html ()
-renderArrCountHtml (CountLine k l n) = div_ [class_ "arr-count-row"] $ do
+renderCountHtml :: Show a => ArrWordsLine a -> Html ()
+renderCountHtml (CountLine k l n) = div_ [class_ "arr-count-row"] $ do
   li_ $ toHtml $ show n <> " " <> renderBytesHtml l <> " " <> (take 100 $ show k)
-renderArrCountHtml (FieldLine cd) = renderClosureHtml cd
+renderCountHtml (FieldLine cd) = renderClosureHtml cd
 
 renderSourceInfoSummary :: SourceInformation -> Html ()
 renderSourceInfoSummary (SourceInformation name cty ty label' modu loc) = do 
@@ -1958,7 +1963,7 @@ app appStateRef = do
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect $ "/profile?selected=" <> TL.fromStrict selectedStr
+            Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
 
       _ -> Scotty.redirect "/"
   {- Creates and displays the graph for the selected object -}
@@ -1981,7 +1986,7 @@ app appStateRef = do
               _ <- runGraphviz graph Svg svgPath
               return ()
             Scotty.html $ renderImgPage name selectedPath capped
-  {- View profile (level 1) -}
+  {- View profile (level 1 and 2) -}
   Scotty.get "/profile" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
@@ -2019,6 +2024,7 @@ app appStateRef = do
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderProfilePage selectedPath (_mode newMajorState)
+  {- Returns to /connect, sets the treeMode -}
   Scotty.post "/reconnect" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
@@ -2053,16 +2059,14 @@ app appStateRef = do
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
       Connected socket debuggee mode ->
-        Scotty.html $ renderArrCountPage selectedPath mode
+        Scotty.html $ renderCountPage "ARR_WORDS" selectedPath mode
   Scotty.post "/arrWordsCount" $ do
-    --Scotty.html $ renderText $ h1_ "display arr_words count"
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
       Connected socket debuggee mode ->
         case mode of
           PausedMode os -> do
-            --profMap <- liftIO $ profile debuggee level "profile_dump" 
             arrMap <- liftIO $ arrWordsAnalysis Nothing debuggee
             let all_res = Prelude.reverse $ 
                   [ (k, S.toList v ) 
@@ -2073,8 +2077,7 @@ app appStateRef = do
                 display_res = maybe id take (_resultSize os) all_res
                 top_closure = [CountLine k (fromIntegral (BS.length k)) (length v) | (k, v) <- display_res]
 
-                -- histogram return Widget, not Html
-                !words_histogram = histogramHtml 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
+                !words_histogram = Just $ histogramHtml 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
                 
                 g_children d (CountLine b _ _) = do
                   let Just cs = M.lookup b arrMap
@@ -2086,13 +2089,52 @@ app appStateRef = do
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
             let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
-            let newOs = os { _treeMode = SearchedHtml (renderArrCountHtml, renderArrCountSummary words_histogram) tree "arrWordsCount" }
+            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary words_histogram) tree "arrWordsCount" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderArrCountPage selectedPath (_mode newMajorState)
+            Scotty.html $ renderCountPage "ARR_WORDS" selectedPath (_mode newMajorState)
+  {- See strings count -}
+  Scotty.get "/stringsCount" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        Scotty.html $ renderCountPage "Strings" selectedPath mode
+  Scotty.post "/stringsCount" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        case mode of
+          PausedMode os -> do
+            stringMap <- liftIO $ stringsAnalysis Nothing debuggee
+            Scotty.html $ renderText $ h1_ "strings count"
+            let sorted_res = maybe id take (_resultSize os) $ 
+                             Prelude.reverse [(k, S.toList v ) 
+                                             | (k, v) <- (List.sortBy (comparing (S.size . snd)) 
+                                             (M.toList stringMap))]
+            
+                top_closure = [CountLine k (length k) (length v) | (k, v) <- sorted_res]
+               
+                g_children d (CountLine b _ _) = do
+                  let Just cs = M.lookup b stringMap
+                  cs' <- run debuggee $ forM (S.toList cs) $ \c -> do
+                    c' <- GD.dereferenceClosure c
+                    return $ ListFullClosure $ Closure c c'
+                  children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
+                  mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
+                g_children d (FieldLine c) = map FieldLine <$> getChildren d c
+
+            let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
+            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary Nothing) tree "stringsCount" }
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.html $ renderCountPage "Strings" selectedPath (_mode newMajorState)
 
 
+   
   where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
