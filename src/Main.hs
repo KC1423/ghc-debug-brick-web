@@ -1313,15 +1313,14 @@ renderSocketSelectionPage st sockets =
     form_ [method_ "post", action_ "/toggle-set-up"] $ do
       button_ "Toggle mode"
     h1_ $ toHtml ("Select a debuggee to connect to (found " <> pack (show (length sockets)) <> "):")
-    form_ [method_ "post", action_ "/connect"] $ do
-      ul_ $ F.forM_ sockets $ \ socket ->
-        li_ $ do
-          input_ [type_ "radio", name_ "socket", value_ (socketName socket)]
-          toHtml $ socketName socket
-      button_ "Connect"
-
-renderSnapshotSelectionPage :: SetupKind -> [SocketInfo] -> TL.Text
-renderSnapshotSelectionPage = renderSocketSelectionPage
+    if null sockets
+      then mempty
+      else form_ [method_ "post", action_ "/connect"] $ do
+             ul_ $ F.forM_ (zip [0 :: Int .. ] sockets) $ \ (i, socket) ->
+               li_ $ do
+                 input_ $ [type_ "radio", name_ "socket", value_ (socketName socket)] ++ [checked_ | i == 0]
+                 toHtml $ socketName socket
+             button_ "Connect"
 
 renderAlreadyConnectedPage :: TL.Text
 renderAlreadyConnectedPage =
@@ -1862,7 +1861,7 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef $ state & majorState .~ Setup st knownDebuggees' knownSnapshots'
         case st of 
           Socket -> Scotty.html $ renderSocketSelectionPage st socketList
-          Snapshot -> Scotty.html $ renderSnapshotSelectionPage st snapshotList
+          Snapshot -> Scotty.html $ renderSocketSelectionPage st snapshotList
       Connected {} -> do
         Scotty.html $ renderAlreadyConnectedPage
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
@@ -1886,7 +1885,23 @@ app appStateRef = do
     case state ^. majorState of
       Setup st knownDebuggees knownSnapshots -> do
         case st of
-          Snapshot -> Scotty.text "snapshot selected: please define me!"
+          Snapshot -> do
+            snapshotName <- Scotty.formParam "socket"
+            let snapshotList = F.toList (knownSnapshots ^. listElementsL)
+                msnapshot = F.find (\s -> TL.fromStrict (socketName s) == snapshotName) snapshotList
+            case msnapshot of
+              Just snapshot -> do
+                debuggee <- liftIO $
+                  snapshotConnect (writeBChan (_appChan state) . ProgressMessage)
+                                  (_socketLocation snapshot)
+                let newState = state & majorState .~ Connected
+                      { _debuggeeSocket = snapshot
+                      , _debuggee = debuggee
+                      , _mode = RunningMode
+                      } 
+                liftIO $ writeIORef appStateRef newState
+                Scotty.redirect "/connect"
+              Nothing -> Scotty.html $ renderBadSocketPage
           Socket -> do
             socketPath <- Scotty.formParam "socket"
             let socketList = F.toList (knownDebuggees ^. listElementsL)
