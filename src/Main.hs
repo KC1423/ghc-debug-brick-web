@@ -1354,7 +1354,7 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
       -- Left column: Summary and stop/start buttons
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
-        renderSummary tree selectedPath
+        detailedSummary renderClosureSummary tree selectedPath
         case mInc of
           Nothing -> mempty
           Just (incSize, capped) -> renderIncSize incSize capped selectedPath
@@ -1393,44 +1393,18 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
 
-renderSummary
-  :: (Ord name, Show name)
-  => IOTree ClosureDetails name
-  -> [Int]
-  -> Html ()
-renderSummary tree path = 
-  div_ [class_ "closure-summary"] $ do
-    let (IOTreeNode node _) = getSubTree tree path
-    h3_ "Selected closure"
-    case node of
-      ClosureDetails c excSize info -> do 
-        renderInfoSummary info
-        li_ $ do
-          strong_ "Exclusive size: "
-          toHtml (show (getSize excSize) <> "B")
-        case node of 
-          ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} ->
-            li_ $ a_ [href_ ("/dumpArrWords?selected=" <> encodePath path)] "Dump ARR_WORDS payload"
-          _ -> mempty
-        
-      LabelNode n -> li_ $ toHtml n
-      InfoDetails info -> renderInfoSummary info
-      CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
-        li_ $ do 
-          strong_ "ID: "
-          toHtml (show ccsID) 
-        renderCC ccsCc
-      CCDetails _ c -> renderCC c
-
-
-renderClosureSummary :: ClosureDetails -> Html ()
-renderClosureSummary node =
+renderClosureSummary :: ClosureDetails -> [Int] -> Html ()
+renderClosureSummary node path =
   case node of
     ClosureDetails c excSize info -> do 
       renderInfoSummary info
       li_ $ do
         strong_ "Exclusive size: "
         toHtml (show (getSize excSize) <> "B")
+        case node of 
+          ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} -> do
+            li_ $ a_ [href_ ("/dumpArrWords?selected=" <> encodePath path)] "Dump ARR_WORDS payload"
+          _ -> mempty
     LabelNode n -> li_ $ toHtml n
     InfoDetails info -> renderInfoSummary info
     CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
@@ -1440,17 +1414,17 @@ renderClosureSummary node =
       renderCC ccsCc
     CCDetails _ c -> renderCC c
 
-detailedSummary :: (Ord name, Show name) => (a -> Html ()) -> IOTree a name -> [Int] -> Html ()
+detailedSummary :: (Ord name, Show name) => (a -> [Int] -> Html ()) -> IOTree a name -> [Int] -> Html ()
 detailedSummary f tree path =
   div_ [class_ "selection-summary"] $ do
     let (IOTreeNode node _) = getSubTree tree path
-    f node
+    f node path
 
 summaryEntry :: (Monad m, Term (HtmlT m ()) result, ToHtml a) => HtmlT m () -> a -> result
 summaryEntry title value = li_ $ strong_ (title <> ": ") >> toHtml value
 
-renderProfileSummary :: CensusStats -> ProfileLine -> Html ()
-renderProfileSummary totalStats line = do
+renderProfileSummary :: CensusStats -> ProfileLine -> [Int] -> Html ()
+renderProfileSummary totalStats line path = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
@@ -1462,7 +1436,7 @@ renderProfileSummary totalStats line = do
       h3_ "Total: "
       ul_ $ renderLineSummary (ProfileLine (GDP.ProfileClosureDesc "Total") GDP.NoArgs totalStats)
   where 
-    renderLineSummary (ClosureLine cs) = renderClosureSummary cs
+    renderLineSummary (ClosureLine cs) = renderClosureSummary cs path
     renderLineSummary (ProfileLine k args (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _)) = do
       summaryEntry "Label" (truncT (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args))
       case k of
@@ -1477,8 +1451,8 @@ renderProfileSummary totalStats line = do
       summaryEntry "Average" (renderBytesHtml @Double (fromIntegral s / fromIntegral n))
 
   
-renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> Html ()
-renderCountSummary mh line = do
+renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> [Int] -> Html ()
+renderCountSummary mh line path = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
@@ -1500,10 +1474,10 @@ renderCountSummary mh line = do
         summaryEntry "Size" (renderBytesHtml l)
         summaryEntry "Total size" (renderBytesHtml $ n * l)
         li_ $ toHtml $ trunc (show b)
-      renderLineSummary (FieldLine c) = renderClosureSummary c
+      renderLineSummary (FieldLine c) = renderClosureSummary c path
 
-renderThunkAnalysisSummary :: ThunkLine -> Html ()
-renderThunkAnalysisSummary (ThunkLine msc c) = do
+renderThunkAnalysisSummary :: ThunkLine -> [Int] -> Html ()
+renderThunkAnalysisSummary (ThunkLine msc c) _ = do
   h3_ "Selection: "
   case msc of
     Nothing -> toHtml ("NoLoc" :: Text)
@@ -1545,7 +1519,7 @@ renderProfilePage :: [Int] -> ConnectedMode -> TL.Text
 renderProfilePage selectedPath mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
-      SearchedHtml (renderRow, renderSummary') tree name -> do
+      SearchedHtml (renderRow, renderSummary', _) tree name -> do
         h1_ "Profile"
         div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
           button_ [ type_ "submit"
@@ -1561,7 +1535,7 @@ renderCountPage :: String -> [Int] -> ConnectedMode -> TL.Text
 renderCountPage title selectedPath mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
-      SearchedHtml (renderRow, renderSummary') tree name -> do
+      SearchedHtml (renderRow, renderSummary', _) tree name -> do
         h1_ $ toHtml $ title ++ " Count"
         div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
           button_ [ type_ "submit"
@@ -1576,7 +1550,7 @@ renderThunkAnalysisPage :: [Int] -> ConnectedMode -> TL.Text
 renderThunkAnalysisPage selectedPath mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
-      SearchedHtml (renderRow, renderSummary') tree name -> do
+      SearchedHtml (renderRow, renderSummary', _) tree name -> do
         h1_ "Thunk analysis"
         div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
 	  button_ [ type_ "submit"
@@ -1840,6 +1814,19 @@ genericGet appStateRef index renderPage = do
         Scotty.html $ renderPage selectedPath mode
 
 
+dumpArrWord cs = do
+  case cs of
+    ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} -> do
+      let payload = arrWordsBS (take (fromIntegral bytes) arrWords)
+      Scotty.setHeader "Content-Type" "application/octet-stream"
+      Scotty.setHeader "Content-Disposition" "attachment; filename=\"closure.bin\""
+      Scotty.raw payload
+arrDumpProf (ClosureLine cs) = dumpArrWord cs 
+arrDumpProf _ = mempty
+arrDumpCount (FieldLine cs) = dumpArrWord cs 
+arrDumpCount _ = mempty
+arrDumpThunk _ = mempty
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
@@ -2072,7 +2059,7 @@ app appStateRef = do
                     return (show i, filledC)
                   mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee (pack lbl) filledItem) filled
             let tree = mkIOTree debuggee sortedProfiles gChildren renderProfileLine id
-            let newOs = os { _treeMode = SearchedHtml (renderProfileHtml, renderProfileSummary totalStats) tree "profile" }
+            let newOs = os { _treeMode = SearchedHtml (renderProfileHtml, renderProfileSummary totalStats, arrDumpProf) tree "profile" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
@@ -2097,15 +2084,13 @@ app appStateRef = do
       Connected socket debuggee mode ->
         case mode of
           PausedMode os -> do
-            let tree = _treeSavedAndGCRoots os
-            let (IOTreeNode node _) = getSubTree tree selectedPath
-            case node of 
-              ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} -> do
-                let payload = arrWordsBS (take (fromIntegral bytes) arrWords)
-                Scotty.setHeader "Content-Type" "application/octet-stream"
-                Scotty.setHeader "Content-Disposition" "attachment; filename=\"closure.bin\""
-                Scotty.raw payload
-              _ -> error "Error dumping arr_words payload"
+            case _treeMode os of
+              SavedAndGCRoots _ -> do
+                let (IOTreeNode node _) = getSubTree (_treeSavedAndGCRoots os) selectedPath
+                dumpArrWord node 
+              SearchedHtml (_, _, dumper) tree _  -> do
+                let (IOTreeNode node _) = getSubTree tree selectedPath
+                dumper node
   {- See arr_words count -}
   genericGet appStateRef "/arrWordsCount" (renderCountPage "ARR_WORDS")
   Scotty.post "/arrWordsCount" $ do
@@ -2137,7 +2122,7 @@ app appStateRef = do
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
             let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
-            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary words_histogram) tree "arrWordsCount" }
+            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary words_histogram, arrDumpCount) tree "arrWordsCount" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
@@ -2169,7 +2154,7 @@ app appStateRef = do
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
             let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
-            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary Nothing) tree "stringsCount" }
+            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary Nothing, arrDumpCount) tree "stringsCount" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
@@ -2188,7 +2173,7 @@ app appStateRef = do
 
                 g_children _ (ThunkLine {}) = pure []
             let tree = mkIOTree debuggee top_closure g_children undefined id
-            let newOs = os { _treeMode = SearchedHtml (renderThunkAnalysisHtml, renderThunkAnalysisSummary) tree "thunkAnalysis" }
+            let newOs = os { _treeMode = SearchedHtml (renderThunkAnalysisHtml, renderThunkAnalysisSummary, arrDumpThunk) tree "thunkAnalysis" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState

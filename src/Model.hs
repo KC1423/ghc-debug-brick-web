@@ -17,6 +17,7 @@ module Model
 
 import Network.Socket as NS
 import Control.Exception (try, SomeException)
+import Web.Scotty.Internal.Types
 import Lucid
 
 import Data.Maybe (fromMaybe)
@@ -146,7 +147,7 @@ data ClosureDetails = ClosureDetails
 data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
               | Retainer (ClosureDetails -> Widget Name) (IOTree (ClosureDetails) Name)
               | forall a . Searched (a -> Widget Name) (IOTree a Name)
-              | forall a . SearchedHtml (a -> Html (), a -> Html ()) (IOTree a Name) String
+              | forall a . SearchedHtml (a -> Html (), a -> [Int] -> Html (), a -> Web.Scotty.Internal.Types.ActionT IO ()) (IOTree a Name) String
 
 treeLength :: TreeMode -> Maybe Int
 treeLength (SavedAndGCRoots {}) = Nothing
