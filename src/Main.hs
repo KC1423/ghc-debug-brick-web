@@ -302,7 +302,7 @@ renderBytes :: Real a => a -> Widget n
 renderBytes n =
   str (getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes)))
 
--- STATUS: Incomplete (not started)
+-- STATUS: Design
 footer :: Int -> Maybe Int -> FooterMode -> Widget Name
 footer n m fmode = vLimit 1 $
  case fmode of
@@ -312,12 +312,12 @@ footer n m fmode = vLimit 1 $
                                                (show n <> " items/" <> maybe "∞" show m <> " max")]
    FooterInput _im form -> renderForm form
 
--- STATUS: Incomplete (might be design)
+-- STATUS: Design
 footerInput :: FooterInputMode -> FooterMode
 footerInput im =
   FooterInput im (footerInputForm im)
 
--- STATUS: Incomplete (might be design)
+-- STATUS: Design
 footerInputForm :: FooterInputMode -> Form Text e Name
 footerInputForm im =
   newForm [(\w -> txtLabel (formatFooterMode im) <+> forceAttr inputAttr w) @@= editTextField id Footer (Just 1)] ""
@@ -349,7 +349,7 @@ updateListFrom dirIO llist = liftIO $ do
                       (newSelection <|> (if Prelude.null debuggeeSockets then Nothing else Just 0))
                       llist
 
--- STATUS: Incomplete (unsure, is this actually used?)
+-- STATUS: Done (in use superficially, might not actually ever be used)
 getChildren :: Debuggee -> ClosureDetails
             -> IO [ClosureDetails]
 getChildren _ LabelNode{} = return []
@@ -364,7 +364,7 @@ getChildren d (CCSDetails _ _ cp) = do
   mapM (\(lbl, cc) -> getClosureDetails d (pack (show lbl)) cc) references
 
 
--- STATUS: Incomplete (unsure)
+-- STATUS: Done (in use)
 fillListItem :: Debuggee
              -> ListItem CCSPtr SrtCont PayloadCont ConstrDescCont StackCont ClosurePtr
              -> IO (ListItem CCSPtr SrtCont PayloadCont ConstrDesc StackCont ClosurePtr)
@@ -374,7 +374,7 @@ fillListItem _ ListData = return ListData
 fillListItem _ (ListCCS c1 c2) = return $ ListCCS c1 c2
 fillListItem _ (ListCC c1) = return $ ListCC c1
 
--- STATUS: Complete (in use)
+-- STATUS: Done (in use)
 mkIOTree :: Debuggee
          -> [a]
          -> (Debuggee -> a -> IO [a])
@@ -523,7 +523,7 @@ prettyCC :: CCPayload -> Text
 prettyCC Debug.CCPayload{..} =
   T.pack ccLabel <> "   " <> T.pack ccMod <> "   " <> T.pack ccLoc
 
--- STATUS: Incomplete (unsure, possibly in use)
+-- STATUS: Done (in use)
 completeClosureDetails :: Debuggee -> (Text, DebugClosure CCSPtr SrtCont PayloadCont ConstrDescCont StackCont ClosurePtr)
                                             -> IO ClosureDetails
 
@@ -531,7 +531,7 @@ completeClosureDetails dbg (label', clos)  =
   getClosureDetails dbg label' . ListFullClosure  =<< fillConstrDesc dbg clos
 
 
--- STATUS: Incomplete (unsure)
+-- STATUS: Done (in use)
 getClosureDetails :: Debuggee
                             -> Text
                             -> ListItem CCSPtr SrtCont PayloadCont ConstrDesc StackCont ClosurePtr
@@ -763,7 +763,7 @@ handleMainWindowEvent dbg brickEvent = do
 
         _ -> return ()
 
--- STATUS: Incomplete
+-- STATUS: Design
 inputFooterHandler :: Debuggee
                    -> FooterInputMode
                    -> Form Text () Name
@@ -1075,16 +1075,16 @@ dispatchFooterInput _ FSetResultSize form = do
          | n <= 0 -> put (os & resultSize .~ Nothing)
          | otherwise -> put (os & resultSize .~ (Just n))
        Nothing -> pure ()
--- Incomplete
+-- DONE
 dispatchFooterInput dbg FSnapshot form = do
    os <- get
    asyncAction_ "Taking snapshot" os $ snapshot dbg (T.unpack (formState form))
 
--- STATUS: Incomplete
+-- STATUS: Design
 asyncAction_ :: Text -> OperationalState -> IO a -> EventM n OperationalState ()
 asyncAction_ desc  os action = asyncAction desc os action (\_ -> return ())
 
--- STATUS: Incomplete
+-- STATUS: Design
 asyncAction :: Text -> OperationalState -> IO a -> (a -> EventM Name OperationalState ()) -> EventM n OperationalState ()
 asyncAction desc os action final = do
   tid <- (liftIO $ forkIO $ do
@@ -1121,15 +1121,15 @@ mkRetainerTree dbg stacks = do
 
   mkIOTree dbg roots lookup_c renderInlineClosureDesc id
 
--- STATUS: Incomplete
+-- STATUS: Design
 resetFooter :: OperationalState -> OperationalState
 resetFooter l = (set footerMode FooterInfo l)
 
--- STATUS: Incomplete
+-- STATUS: Design
 footerMessage :: Text -> OperationalState -> OperationalState
 footerMessage t l = (set footerMode (FooterMessage t) l)
 
--- STATUS: Incomplete
+-- STATUS: Design
 myAppStartEvent :: EventM Name AppState ()
 myAppStartEvent = return ()
 
@@ -1319,7 +1319,7 @@ renderSocketSelectionPage st sockets =
              ul_ $ F.forM_ (zip [0 :: Int .. ] sockets) $ \ (i, socket) ->
                li_ $ do
                  input_ $ [type_ "radio", name_ "socket", value_ (socketName socket)] ++ [checked_ | i == 0]
-                 toHtml $ socketName socket
+                 toHtml $ socketName socket <> " - " <> renderSocketTime socket
              button_ "Connect"
 
 renderAlreadyConnectedPage :: TL.Text
@@ -1343,42 +1343,54 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     form_ [method_ "post", action_ "/pause"] $ 
       button_ "Pause process" 
   PausedMode os -> do
-    div_ [style_ "position: absolute; top: 50px; right: 10px;"] $ do
-      form_ [ method_ "post", action_ "/profile"
-            , style_ "display: flex; align-items: center; gap: 8px;"] $ do
-        button_ [type_ "submit"] (toHtml ("View profile" :: Text))
-        select_ [name_ "profileLevel"] $ do
-          option_ [value_ "1"] (toHtml ("Level one" :: Text))
-          option_ [value_ "2"] (toHtml ("Level two" :: Text))
-      form_ [ method_ "post", action_ "/arrWordsCount"
-            , style_ "display: flex; align-items: center; gap: 8px;"] $ do
-        button_ [type_ "submit"] "View ARR_WORDS count"
-      form_ [ method_ "post", action_ "/stringsCount"
-            , style_ "display: flex; align-items: center; gap: 8px;"] $ do
-        button_ [type_ "submit"] "View strings count"
-      form_ [ method_ "post", action_ "/thunkAnalysis"
-            , style_ "display: flex; align-items: center; gap: 8px;"] $ do
-        button_ [type_ "submit"] "View thunk analysis"
-
-
     let tree = _treeSavedAndGCRoots os
+
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
     form_ [method_ "post", action_ "/resume"] $
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-    renderSummary tree selectedPath
-    case mInc of
-      Nothing -> mempty
-      Just (incSize, capped) -> renderIncSize incSize capped selectedPath
-    form_ [method_ "post", action_ "/img"] $ do
-      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-      button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
+
+    div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
+      -- Left column: Summary and stop/start buttons
+      div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
+        renderSummary tree selectedPath
+        case mInc of
+          Nothing -> mempty
+          Just (incSize, capped) -> renderIncSize incSize capped selectedPath
+        form_ [method_ "post", action_ "/img"] $ do
+          input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+          button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
+
+
+      -- Right column: Total stats
+      div_ [ style_ "flex: 1;" ] $ do
+        div_ [style_ "position: absolute; top: 50px; right: 10px;"] $ do
+          form_ [ method_ "post", action_ "/profile"
+                , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+            button_ [type_ "submit"] (toHtml ("View profile" :: Text))
+            select_ [name_ "profileLevel"] $ do
+              option_ [value_ "1"] (toHtml ("Level one" :: Text))
+              option_ [value_ "2"] (toHtml ("Level two" :: Text))
+          form_ [ method_ "post", action_ "/arrWordsCount"
+                , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+            button_ [type_ "submit"] "View ARR_WORDS count"
+          form_ [ method_ "post", action_ "/stringsCount"
+                , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+            button_ [type_ "submit"] "View strings count"
+          form_ [ method_ "post", action_ "/thunkAnalysis"
+                , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+            button_ [type_ "submit"] "View thunk analysis"
+          form_ [ method_ "post", action_ "/takeSnapshot"
+                , style_ "display: flex; align-items: center; gap: 8px; margin-top: 20px;"] $ do
+            input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot filename", required_ "required"]
+            button_ [type_ "submit"] "Take snapshot"
+
     h3_ $ toHtml $ case os ^. treeMode of
-        SavedAndGCRoots {} -> pack "Root Closures"
-        Retainer {} -> pack "Retainers"
-        Searched {} -> pack "Search Results"
-    renderIOTreeHtml tree selectedPath renderClosureHtmlRow
+      SavedAndGCRoots {} -> pack "Root Closures"
+      Retainer {} -> pack "Retainers"
+      Searched {} -> pack "Search Results"
+    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
 
 renderSummary
@@ -1410,6 +1422,7 @@ renderSummary tree path =
         renderCC ccsCc
       CCDetails _ c -> renderCC c
 
+
 renderClosureSummary :: ClosureDetails -> Html ()
 renderClosureSummary node =
   case node of
@@ -1418,29 +1431,29 @@ renderClosureSummary node =
       li_ $ do
         strong_ "Exclusive size: "
         toHtml (show (getSize excSize) <> "B")
-    LabelNode n -> do
-      li_ $ toHtml n
-    InfoDetails info -> do
-      renderInfoSummary info
+    LabelNode n -> li_ $ toHtml n
+    InfoDetails info -> renderInfoSummary info
     CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
       li_ $ do 
         strong_ "ID: "
         toHtml (show ccsID) 
       renderCC ccsCc
-    CCDetails _ c -> do
-      renderCC c
+    CCDetails _ c -> renderCC c
 
 detailedSummary :: (Ord name, Show name) => (a -> Html ()) -> IOTree a name -> [Int] -> Html ()
 detailedSummary f tree path =
-  div_ [class_ "profile-summary"] $ do
+  div_ [class_ "selection-summary"] $ do
     let (IOTreeNode node _) = getSubTree tree path
     f node
+
+summaryEntry :: (Monad m, Term (HtmlT m ()) result, ToHtml a) => HtmlT m () -> a -> result
+summaryEntry title value = li_ $ strong_ (title <> ": ") >> toHtml value
 
 renderProfileSummary :: CensusStats -> ProfileLine -> Html ()
 renderProfileSummary totalStats line = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
-    div_ [ style_ "flex: 1;" ] $ do
+    div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
       h3_ "Selection: "
       ul_ $ renderLineSummary line
 
@@ -1451,23 +1464,24 @@ renderProfileSummary totalStats line = do
   where 
     renderLineSummary (ClosureLine cs) = renderClosureSummary cs
     renderLineSummary (ProfileLine k args (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _)) = do
-      li_ $ strong_ "Label: " >> toHtml (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args) 
+      summaryEntry "Label" (truncT (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args))
       case k of
         GDP.ProfileConstrDesc desc -> do
-          li_ $ strong_ "Package: " >> toHtml (GDP.pkgsText desc)
-          li_ $ strong_ "Module: " >> toHtml (GDP.modlText desc)
-          li_ $ strong_ "Constructor: " >> toHtml (GDP.nameText desc)
+          summaryEntry "Package" (GDP.pkgsText desc)
+          summaryEntry "Module" (GDP.modlText desc)
+          summaryEntry "Constructor" (GDP.nameText desc)
         _ -> mempty
-      li_ $ strong_ "Count: " >> toHtml (show n)
-      li_ $ strong_ "Size: " >> toHtml (renderBytesHtml s)
-      li_ $ strong_ "Max: " >> toHtml (renderBytesHtml mn)
-      li_ $ strong_ "Average: " >> toHtml (renderBytesHtml @Double (fromIntegral s / fromIntegral n))
+      summaryEntry "Count" (show n)
+      summaryEntry "Size" (renderBytesHtml s)
+      summaryEntry "Max" (renderBytesHtml mn)
+      summaryEntry "Average" (renderBytesHtml @Double (fromIntegral s / fromIntegral n))
+
   
 renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> Html ()
 renderCountSummary mh line = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
-    div_ [ style_ "flex: 1;" ] $ do
+    div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
       h3_ "Selection: "
       ul_ $ renderLineSummary line
 
@@ -1482,10 +1496,10 @@ renderCountSummary mh line = do
     where
       renderLineSummary :: Show a => ArrWordsLine a -> Html ()
       renderLineSummary (CountLine b l n) = do
-        li_ $ strong_ "Count: " >> toHtml (show n)
-        li_ $ strong_ "Size: " >> toHtml (renderBytesHtml l)
-        li_ $ strong_ "Total size: " >> toHtml (renderBytesHtml $ n * l)
-        li_ $ toHtml (show b)
+        summaryEntry "Count" (show n)
+        summaryEntry "Size" (renderBytesHtml l)
+        summaryEntry "Total size" (renderBytesHtml $ n * l)
+        li_ $ toHtml $ trunc (show b)
       renderLineSummary (FieldLine c) = renderClosureSummary c
 
 renderThunkAnalysisSummary :: ThunkLine -> Html ()
@@ -1494,7 +1508,7 @@ renderThunkAnalysisSummary (ThunkLine msc c) = do
   case msc of
     Nothing -> toHtml ("NoLoc" :: Text)
     Just sc -> renderSourceInfoSummary sc
-  li_ $ strong_ "Count: " >> toHtml (show $ getCount c)
+  summaryEntry "Count" (show $ getCount c)
 
 
 
@@ -1538,7 +1552,7 @@ renderProfilePage selectedPath mode = renderText $ case mode of
                   , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
                   ] "Return to saved objects and GC roots"
         div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
-        detailedSummary renderSummary' tree selectedPath--renderProfileSummary --tree selectedPath 
+        detailedSummary renderSummary' tree selectedPath
         h3_ "Results"
         renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
         autoScrollScript
@@ -1574,40 +1588,6 @@ renderThunkAnalysisPage selectedPath mode = renderText $ case mode of
         autoScrollScript
 
 
-renderClosureHtml :: ClosureDetails -> Html ()
-renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
-  li_ $ toHtml $ _labelInParent info <> " | " <> pack (closureShowAddress closure) <> " | " <> _pretty info 
-renderClosureHtml (InfoDetails info) = div_ [class_ "closure-row"] $ do
-  li_ $ toHtml $ _labelInParent info <> " | " <> _pretty info 
-renderClosureHtml (LabelNode t) = div_ [class_ "closure-row"] $ do
-  li_ $ toHtml $ t
-renderClosureHtml (CCSDetails clabel _cptr ccspayload) = div_ [class_ "closure-row"] $ do
-  li_ $ toHtml $ clabel <> " | " <> prettyCCS ccspayload 
-renderClosureHtml (CCDetails clabel cc) = div_ [class_ "closure-row"] $ do
-  li_ $ toHtml $ clabel <> " | " <> prettyCC cc
-
-
-renderClosureHtmlRow :: [Int] -> [Int] -> Bool -> Bool -> ClosureDetails -> Html ()
-renderClosureHtmlRow selectedPath thisPath expanded selected closureDesc =
-  let depth = length thisPath
-      indentPx = depth * 20
-      classStr = "tree-row" <> if selected then " selected" else ""
-      styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
-      pathStr = encodePath thisPath
-      selectedStr = encodePath selectedPath
-      linkStyle = "color: " ++ (if selected then "purple" else "blue") ++ "; text-decoration: none;"
-  in div_ [class_ classStr, styleAttr] $ do
-      form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
-        input_ [type_ "hidden", name_ "toggle", value_ pathStr]
-        input_ [type_ "hidden", name_ "selected", value_ selectedStr]
-        button_ [type_ "submit", class_ "expand-button"] $ 
-          toHtml $ if expanded then "+" else "-" :: String
-      a_ [href_ ("/connect?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderClosureHtml closureDesc
-
-
-
-
-
 detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
 detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
   let depth = length thisPath
@@ -1625,6 +1605,17 @@ detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
            toHtml $ if expanded then "+" else "-" :: String
        a_ [href_ ("/" <> pack name <> "?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderHtml obj
 
+renderClosureHtml :: ClosureDetails -> Html ()
+renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ _labelInParent info <> " | " <> pack (closureShowAddress closure) <> " | " <> _pretty info 
+renderClosureHtml (InfoDetails info) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ _labelInParent info <> " | " <> _pretty info 
+renderClosureHtml (LabelNode t) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ t
+renderClosureHtml (CCSDetails clabel _cptr ccspayload) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ clabel <> " | " <> prettyCCS ccspayload 
+renderClosureHtml (CCDetails clabel cc) = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ clabel <> " | " <> prettyCC cc
 
 renderProfileHtml :: ProfileLine -> Html ()
 renderProfileHtml (ClosureLine c) = renderClosureHtml c 
@@ -1649,11 +1640,11 @@ renderThunkAnalysisHtml (ThunkLine msc (Count c)) =
 
 renderSourceInfoSummary :: SourceInformation -> Html ()
 renderSourceInfoSummary (SourceInformation name cty ty label' modu loc) = do 
-  li_ $ strong_ "Name: " >> toHtml name
-  li_ $ strong_ "Closure type: " >> toHtml (show cty)
-  li_ $ strong_ "Label: " >> toHtml label'
-  li_ $ strong_ "Module: " >> toHtml modu
-  li_ $ strong_ "Location: " >> toHtml loc
+  summaryEntry "Name" name
+  summaryEntry "Closure type" (show cty)
+  summaryEntry "Label" label'
+  summaryEntry "Module" modu
+  summaryEntry "Location" loc
 
 
 renderInfoSummary :: InfoInfo -> Html ()
@@ -1666,7 +1657,7 @@ renderInfoSummary info = do
                     Debug.LDVWord{} -> "LDV info: "
                     Debug.EraWord{} -> "Era: "
                     Debug.OtherHeader{} -> "Other: "
-      in li_ $ strong_ label >> toHtml (renderProfHeader x)
+      in summaryEntry label (renderProfHeader x)
     Nothing -> mempty
   where renderProfHeader pinfo@(Debug.RetainerHeader {}) = show pinfo
         renderProfHeader (Debug.LDVWord {state, creationTime, lastUseTime}) = 
@@ -1679,13 +1670,13 @@ renderInfoSummary info = do
 
 renderCC :: CCPayload -> Html ()
 renderCC Debug.CCPayload{..} = do
-  li_ $ strong_ "Label: " >> toHtml ccLabel
-  li_ $ strong_ "CC ID: " >> toHtml (show ccID)
-  li_ $ strong_ "Module: " >> toHtml ccMod
-  li_ $ strong_ "Location: " >> toHtml ccLoc
-  li_ $ strong_ "Allocation: " >> toHtml (show ccMemAlloc)
-  li_ $ strong_ "Time ticks: " >> toHtml (show ccTimeTicks)
-  li_ $ strong_ "Is CAF: " >> toHtml (show ccIsCaf) 
+  summaryEntry "Label" ccLabel
+  summaryEntry "CC ID" (show ccID)
+  summaryEntry "Module" ccMod
+  summaryEntry "Location" ccLoc
+  summaryEntry "Allocation" (show ccMemAlloc)
+  summaryEntry "Time ticks" (show ccTimeTicks)
+  summaryEntry "Is CAF" (show ccIsCaf)
 
 getClosureIncSize :: Set.Set String -> IOTreeNode ClosureDetails name -> Int
 getClosureIncSize seen' node = fst (go seen' node)
@@ -1753,6 +1744,12 @@ parseProfileLevel "2" = TwoLevel
 unquote :: String -> String
 unquote ('\"':xs) | last xs == '\"' = init xs
 unquote xs = xs
+
+trunc :: String -> String
+trunc s = take n s ++ (if length s > n then "..." else "")
+  where n = 30
+truncT :: Text -> Text
+truncT = pack . trunc . T.unpack
 
 encodePath :: [Int] -> Text
 encodePath = pack . List.intercalate "." . map show
@@ -1830,6 +1827,19 @@ autoScrollScript = script_ $ mconcat
 svgPath :: String
 svgPath = "tmp/graph.svg"
 
+genericGet :: IORef AppState
+           -> Scotty.RoutePattern
+           -> ([Int] -> ConnectedMode -> TL.Text)
+           -> Scotty.ScottyM ()
+genericGet appStateRef index renderPage = do
+  Scotty.get index $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        Scotty.html $ renderPage selectedPath mode
+
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
@@ -1847,8 +1857,6 @@ app appStateRef = do
         Scotty.file filePath
       else
         Scotty.text "Profile dump not found."
-
-
   {- Main page where sockets/snapshots can be selected for debugging -}
   Scotty.get "/" $ do
     state <- liftIO $ readIORef appStateRef
@@ -2015,7 +2023,6 @@ app appStateRef = do
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
-
       _ -> Scotty.redirect "/"
   {- Creates and displays the graph for the selected object -}
   Scotty.post "/img" $ do
@@ -2038,12 +2045,7 @@ app appStateRef = do
               return ()
             Scotty.html $ renderImgPage name selectedPath capped
   {- View profile (level 1 and 2) -}
-  Scotty.get "/profile" $ do
-    state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
-    case state ^. majorState of
-      Connected socket debuggee mode ->
-        Scotty.html $ renderProfilePage selectedPath mode
+  genericGet appStateRef "/profile" renderProfilePage
   Scotty.post "/profile" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
@@ -2105,12 +2107,7 @@ app appStateRef = do
                 Scotty.raw payload
               _ -> error "Error dumping arr_words payload"
   {- See arr_words count -}
-  Scotty.get "/arrWordsCount" $ do
-    state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
-    case state ^. majorState of
-      Connected socket debuggee mode ->
-        Scotty.html $ renderCountPage "ARR_WORDS" selectedPath mode
+  genericGet appStateRef "/arrWordsCount" (renderCountPage "ARR_WORDS")
   Scotty.post "/arrWordsCount" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
@@ -2146,12 +2143,7 @@ app appStateRef = do
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderCountPage "ARR_WORDS" selectedPath (_mode newMajorState)
   {- See strings count -}
-  Scotty.get "/stringsCount" $ do
-    state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
-    case state ^. majorState of
-      Connected socket debuggee mode ->
-        Scotty.html $ renderCountPage "Strings" selectedPath mode
+  genericGet appStateRef "/stringsCount" (renderCountPage "Strings")
   Scotty.post "/stringsCount" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
@@ -2183,12 +2175,7 @@ app appStateRef = do
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderCountPage "Strings" selectedPath (_mode newMajorState)
   {- Thunk analysis -}
-  Scotty.get "/thunkAnalysis" $ do
-    state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
-    case state ^. majorState of
-      Connected socket debuggee mode ->
-        Scotty.html $ renderThunkAnalysisPage selectedPath mode
+  genericGet appStateRef "/thunkAnalysis" renderThunkAnalysisPage
   Scotty.post "/thunkAnalysis" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
@@ -2206,7 +2193,13 @@ app appStateRef = do
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderThunkAnalysisPage selectedPath (_mode newMajorState)
-
+  Scotty.post "/takeSnapshot" $ do
+    state <- liftIO $ readIORef appStateRef
+    filename <- Scotty.formParam "filename"
+    case state ^. majorState of
+      Connected socket debuggee mode -> do
+        liftIO $ snapshot debuggee filename
+        Scotty.redirect "/connect"
    
   where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
