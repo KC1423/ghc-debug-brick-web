@@ -1515,21 +1515,28 @@ renderImgPage name selectedPath capped =
                 ] "Download SVG"
       img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
 
+
+reconnectLink = do
+  div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
+    button_ [ type_ "submit"
+            , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
+            ] "Return to saved objects and GC roots"
+
+genericTreeBody tree selectedPath renderRow renderSummary' name = do
+  detailedSummary renderSummary' tree selectedPath
+  h3_ "Results"
+  renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
+  autoScrollScript
+
 renderProfilePage :: [Int] -> ConnectedMode -> TL.Text
 renderProfilePage selectedPath mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
       SearchedHtml (renderRow, renderSummary', _) tree name -> do
         h1_ "Profile"
-        div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
-          button_ [ type_ "submit"
-                  , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
-                  ] "Return to saved objects and GC roots"
+        reconnectLink
         div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
-        detailedSummary renderSummary' tree selectedPath
-        h3_ "Results"
-        renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
-        autoScrollScript
+        genericTreeBody tree selectedPath renderRow renderSummary' name
 
 renderCountPage :: String -> [Int] -> ConnectedMode -> TL.Text
 renderCountPage title selectedPath mode = renderText $ case mode of
@@ -1537,31 +1544,18 @@ renderCountPage title selectedPath mode = renderText $ case mode of
     case _treeMode os of
       SearchedHtml (renderRow, renderSummary', _) tree name -> do
         h1_ $ toHtml $ title ++ " Count"
-        div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
-          button_ [ type_ "submit"
-                  , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
-                  ] "Return to saved objects and GC roots"
-        detailedSummary renderSummary' tree selectedPath
-        h3_ "Results"
-        renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
-        autoScrollScript
-
+        reconnectLink
+        genericTreeBody tree selectedPath renderRow renderSummary' name
+        
 renderThunkAnalysisPage :: [Int] -> ConnectedMode -> TL.Text
 renderThunkAnalysisPage selectedPath mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
       SearchedHtml (renderRow, renderSummary', _) tree name -> do
         h1_ "Thunk analysis"
-        div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
-	  button_ [ type_ "submit"
-	          , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
-		  ] "Return to saved objects and GC roots"
-        detailedSummary renderSummary' tree selectedPath
-        h3_ "Results"
-        renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
-        autoScrollScript
-
-
+        reconnectLink
+        genericTreeBody tree selectedPath renderRow renderSummary' name
+        
 detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
 detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
   let depth = length thisPath
@@ -1598,7 +1592,6 @@ renderProfileHtml (ProfileLine k kargs c) = div_ [class_ "profile-line-row"] $ d
   where showLine (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _) =
           pack (show s ++ " " ++ show n ++ " " ++ show mn ++ " " ++
                 (Numeric.showFFloat @Double (Just 1) (fromIntegral s / fromIntegral n) ""))
-renderProfileHtml _ = error "Profile line: not implemented"
 
 renderCountHtml :: Show a => ArrWordsLine a -> Html ()
 renderCountHtml (CountLine k l n) = div_ [class_ "arr-count-row"] $ do
@@ -1768,24 +1761,16 @@ histogramHtml boxes m = do
   mapM_ displayLine (bin 0 (map calcPercentage (List.sort m )))
   where
     Size maxSize = maximum m
-
-    calcPercentage (Size tot) =
-      (tot, (fromIntegral tot/ fromIntegral maxSize) * 100 :: Double)
-
+    calcPercentage (Size tot) = (tot, (fromIntegral tot/ fromIntegral maxSize) * 100 :: Double)
     displayLine (l, h, n, tot) =
       li_ $ toHtml $ show l <> "%-" <> show h <> "%: " <> show n <> " " <> renderBytesHtml tot
-
     step = fromIntegral (ceiling @Double @Int (100 / fromIntegral boxes))
-
     bin _ [] = []
     bin k xs = case now of
                  [] -> bin (k + step) later
                  _ -> (k, k+step, length now, sum (map fst now)) : bin (k + step) later
       where
         (now, later) = span ((<= k + step) . snd) xs
-
-
-
 
 autoScrollScript = script_ $ mconcat
                      [ "window.addEventListener('beforeunload', () => {"
@@ -1796,7 +1781,6 @@ autoScrollScript = script_ $ mconcat
                      , "if (scrollY !== null) window.scrollTo(0, parseInt(scrollY, 10));"
                      , "});"
                      ]
-
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1813,7 +1797,6 @@ genericGet appStateRef index renderPage = do
       Connected socket debuggee mode ->
         Scotty.html $ renderPage selectedPath mode
 
-
 dumpArrWord cs = do
   case cs of
     ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} -> do
@@ -1826,6 +1809,25 @@ arrDumpProf _ = mempty
 arrDumpCount (FieldLine cs) = dumpArrWord cs 
 arrDumpCount _ = mempty
 arrDumpThunk _ = mempty
+
+handleConnect appStateRef state formValue options isValid connect = do
+  let match = F.find (\s -> TL.fromStrict (socketName s) == formValue) options
+  case match of
+    Just socketLike -> do
+      valid <- liftIO $ isValid socketLike
+      if valid
+        then do
+          debuggee <- liftIO $ connect (writeBChan (_appChan state) . ProgressMessage)
+                                 (_socketLocation socketLike)
+          let newState = state & majorState .~ Connected
+                      { _debuggeeSocket = socketLike
+                      , _debuggee = debuggee
+                      , _mode = RunningMode
+                      }
+          liftIO $ writeIORef appStateRef newState
+          Scotty.redirect "/connect"
+        else Scotty.html renderBadSocketPage
+    Nothing -> Scotty.html renderBadSocketPage
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1879,45 +1881,15 @@ app appStateRef = do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Setup st knownDebuggees knownSnapshots -> do
+        socketParam <- Scotty.formParam "socket"
         case st of
           Snapshot -> do
-            snapshotName <- Scotty.formParam "socket"
-            let snapshotList = F.toList (knownSnapshots ^. listElementsL)
-                msnapshot = F.find (\s -> TL.fromStrict (socketName s) == snapshotName) snapshotList
-            case msnapshot of
-              Just snapshot -> do
-                debuggee <- liftIO $
-                  snapshotConnect (writeBChan (_appChan state) . ProgressMessage)
-                                  (_socketLocation snapshot)
-                let newState = state & majorState .~ Connected
-                      { _debuggeeSocket = snapshot
-                      , _debuggee = debuggee
-                      , _mode = RunningMode
-                      } 
-                liftIO $ writeIORef appStateRef newState
-                Scotty.redirect "/connect"
-              Nothing -> Scotty.html $ renderBadSocketPage
+            let snapshots = F.toList (knownSnapshots ^. listElementsL)
+            handleConnect appStateRef state socketParam snapshots (\ _ -> pure True) snapshotConnect 
           Socket -> do
-            socketPath <- Scotty.formParam "socket"
-            let socketList = F.toList (knownDebuggees ^. listElementsL)
-                msocket = F.find (\s -> TL.fromStrict (socketName s) == socketPath) socketList
-            case msocket of
-              Just socket -> do
-                alive <- liftIO $ isSocketAlive (_socketLocation socket)
-                if alive then do
-                  debuggee <- liftIO $ 
-                    debuggeeConnect (writeBChan (_appChan state) . ProgressMessage)
-                                    (_socketLocation socket)
-                  let newState = state & majorState .~ Connected
-                          { _debuggeeSocket = socket,
-                            _debuggee = debuggee,
-                            _mode = RunningMode
-                          }
-                  liftIO $ writeIORef appStateRef newState
-                  Scotty.redirect "/connect"
-                else do
-                  Scotty.html $ renderBadSocketPage
-              Nothing -> Scotty.html $ renderBadSocketPage 
+            let sockets = F.toList (knownDebuggees ^. listElementsL)
+            handleConnect appStateRef state socketParam sockets
+                          (\s -> isSocketAlive (_socketLocation s)) debuggeeConnect
       Connected socket debuggee mode -> do
         selectedPath <- selectedParam Scotty.queryParam        
         case mode of
