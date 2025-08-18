@@ -1354,16 +1354,16 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
       -- Left column: Summary and stop/start buttons
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
-        detailedSummary renderClosureSummary tree selectedPath
-        case mInc of
+        detailedSummary renderClosureSummary tree selectedPath mInc
+        {-case mInc of
           Nothing -> mempty
-          Just (incSize, capped) -> renderIncSize incSize capped selectedPath
+          Just (incSize, capped) -> renderIncSize incSize capped selectedPath-}
         form_ [method_ "post", action_ "/img"] $ do
           input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
           button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
 
 
-      -- Right column: Total stats
+      -- Right column: Analysis buttons
       div_ [ style_ "flex: 1;" ] $ do
         div_ [style_ "position: absolute; top: 50px; right: 10px;"] $ do
           form_ [ method_ "post", action_ "/profile"
@@ -1385,6 +1385,7 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
                 , style_ "display: flex; align-items: center; gap: 8px; margin-top: 20px;"] $ do
             input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot filename", required_ "required"]
             button_ [type_ "submit"] "Take snapshot"
+          --form_ [ method_ "post", action_ "/modifyfilters"]
 
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
@@ -1393,8 +1394,8 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
 
-renderClosureSummary :: ClosureDetails -> [Int] -> Html ()
-renderClosureSummary node path =
+renderClosureSummary :: ClosureDetails -> [Int] -> Maybe (Int, Bool) -> Html ()
+renderClosureSummary node path mInc =
   case node of
     ClosureDetails c excSize info -> do 
       renderInfoSummary info
@@ -1405,6 +1406,10 @@ renderClosureSummary node path =
           ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} -> do
             li_ $ a_ [href_ ("/dumpArrWords?selected=" <> encodePath path)] "Dump ARR_WORDS payload"
           _ -> mempty
+        case mInc of
+          Nothing -> mempty
+          Just (incSize, capped) -> renderIncSize incSize capped path
+
     LabelNode n -> li_ $ toHtml n
     InfoDetails info -> renderInfoSummary info
     CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
@@ -1414,17 +1419,18 @@ renderClosureSummary node path =
       renderCC ccsCc
     CCDetails _ c -> renderCC c
 
-detailedSummary :: (Ord name, Show name) => (a -> [Int] -> Html ()) -> IOTree a name -> [Int] -> Html ()
-detailedSummary f tree path =
+detailedSummary :: (Ord name, Show name) => (a -> [Int] -> Maybe (Int, Bool) -> Html ()) -> IOTree a name -> [Int] ->
+                   Maybe (Int, Bool) -> Html ()
+detailedSummary f tree path mInc =
   div_ [class_ "selection-summary"] $ do
     let (IOTreeNode node _) = getSubTree tree path
-    f node path
+    f node path mInc
 
 summaryEntry :: (Monad m, Term (HtmlT m ()) result, ToHtml a) => HtmlT m () -> a -> result
 summaryEntry title value = li_ $ strong_ (title <> ": ") >> toHtml value
 
-renderProfileSummary :: CensusStats -> ProfileLine -> [Int] -> Html ()
-renderProfileSummary totalStats line path = do
+renderProfileSummary :: CensusStats -> ProfileLine -> [Int] -> Maybe (Int, Bool) -> Html ()
+renderProfileSummary totalStats line path mInc = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
@@ -1436,7 +1442,7 @@ renderProfileSummary totalStats line path = do
       h3_ "Total: "
       ul_ $ renderLineSummary (ProfileLine (GDP.ProfileClosureDesc "Total") GDP.NoArgs totalStats)
   where 
-    renderLineSummary (ClosureLine cs) = renderClosureSummary cs path
+    renderLineSummary (ClosureLine cs) = renderClosureSummary cs path mInc
     renderLineSummary (ProfileLine k args (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _)) = do
       summaryEntry "Label" (truncT (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args))
       case k of
@@ -1451,8 +1457,8 @@ renderProfileSummary totalStats line path = do
       summaryEntry "Average" (renderBytesHtml @Double (fromIntegral s / fromIntegral n))
 
   
-renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> [Int] -> Html ()
-renderCountSummary mh line path = do
+renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> [Int] -> Maybe (Int, Bool) -> Html ()
+renderCountSummary mh line path mInc = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
@@ -1474,10 +1480,10 @@ renderCountSummary mh line path = do
         summaryEntry "Size" (renderBytesHtml l)
         summaryEntry "Total size" (renderBytesHtml $ n * l)
         li_ $ toHtml $ trunc (show b)
-      renderLineSummary (FieldLine c) = renderClosureSummary c path
+      renderLineSummary (FieldLine c) = renderClosureSummary c path mInc
 
-renderThunkAnalysisSummary :: ThunkLine -> [Int] -> Html ()
-renderThunkAnalysisSummary (ThunkLine msc c) _ = do
+renderThunkAnalysisSummary :: ThunkLine -> [Int] -> Maybe (Int, Bool) -> Html ()
+renderThunkAnalysisSummary (ThunkLine msc c) _ _ = do
   h3_ "Selection: "
   case msc of
     Nothing -> toHtml ("NoLoc" :: Text)
@@ -1522,39 +1528,39 @@ reconnectLink = do
             , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
             ] "Return to saved objects and GC roots"
 
-genericTreeBody tree selectedPath renderRow renderSummary' name = do
-  detailedSummary renderSummary' tree selectedPath
+genericTreeBody tree selectedPath renderRow renderSummary' name mInc = do
+  detailedSummary renderSummary' tree selectedPath mInc
   h3_ "Results"
   renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
   autoScrollScript
 
-renderProfilePage :: [Int] -> ConnectedMode -> TL.Text
-renderProfilePage selectedPath mode = renderText $ case mode of
+renderProfilePage :: [Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text
+renderProfilePage selectedPath mInc mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
-      SearchedHtml (renderRow, renderSummary', _) tree name -> do
+      SearchedHtml (renderRow, renderSummary', _, _, _) tree name -> do
         h1_ "Profile"
         reconnectLink
         div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
-        genericTreeBody tree selectedPath renderRow renderSummary' name
+        genericTreeBody tree selectedPath renderRow renderSummary' name mInc
 
-renderCountPage :: String -> [Int] -> ConnectedMode -> TL.Text
-renderCountPage title selectedPath mode = renderText $ case mode of
+renderCountPage :: String -> [Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text
+renderCountPage title selectedPath mInc mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
-      SearchedHtml (renderRow, renderSummary', _) tree name -> do
+      SearchedHtml (renderRow, renderSummary', _, _, _) tree name -> do
         h1_ $ toHtml $ title ++ " Count"
         reconnectLink
-        genericTreeBody tree selectedPath renderRow renderSummary' name
+        genericTreeBody tree selectedPath renderRow renderSummary' name mInc
         
-renderThunkAnalysisPage :: [Int] -> ConnectedMode -> TL.Text
-renderThunkAnalysisPage selectedPath mode = renderText $ case mode of
+renderThunkAnalysisPage :: [Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text
+renderThunkAnalysisPage selectedPath mInc mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
-      SearchedHtml (renderRow, renderSummary', _) tree name -> do
+      SearchedHtml (renderRow, renderSummary', _, _, _) tree name -> do
         h1_ "Thunk analysis"
         reconnectLink
-        genericTreeBody tree selectedPath renderRow renderSummary' name
+        genericTreeBody tree selectedPath renderRow renderSummary' name mInc
         
 detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
 detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
@@ -1645,10 +1651,32 @@ renderCC Debug.CCPayload{..} = do
   summaryEntry "Time ticks" (show ccTimeTicks)
   summaryEntry "Is CAF" (show ccIsCaf)
 
-getClosureIncSize :: Set.Set String -> IOTreeNode ClosureDetails name -> Int
-getClosureIncSize seen' node = fst (go seen' node)
+
+getIncSize :: (a -> Maybe String) -> (a -> Int) -> IOTree a name -> [Int] -> IO (Int, Bool)
+getIncSize getName getSize' tree selectedPath = do
+  let subtree = getSubTree tree selectedPath
+  (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName)
+  return (getClosureIncSize getName getSize' Set.empty expSubTree, capped)
+
+
+getClosureIncSize :: (a -> Maybe String) -> (a -> Int) -> Set.Set String -> IOTreeNode a name -> Int
+getClosureIncSize getName getSize' seen' node = fst (go seen' node)
   where
-    go :: Set.Set String -> IOTreeNode ClosureDetails name -> (Int, Set.Set String)
+--    go :: Set.Set String -> IOTreeNode a name -> (Int, Set.Set String)
+    go seen (IOTreeNode n csE) =
+      --let ptr = getName n --closureShowAddress c
+      case getName n of
+        Nothing -> case csE of 
+                     Left _ -> (0, seen)
+                     Right cs -> listApply go 0 seen cs
+        Just ptr -> 
+          if Set.member ptr seen
+          then (0, seen)
+          else case csE of 
+                 Left _ -> (getSize' n, seen) 
+                 Right cs -> let (cSize, newSeen) = listApply go 0 (Set.insert ptr seen) cs
+                             in ((getSize' n + cSize), newSeen)
+    {-
     go seen (IOTreeNode (ClosureDetails c excSize _) csE) =
       let ptr = closureShowAddress c
       in if Set.member ptr seen
@@ -1660,7 +1688,7 @@ getClosureIncSize seen' node = fst (go seen' node)
     go seen (IOTreeNode _ csE) =
       case csE of
         Left _ -> (0, seen)
-        Right cs -> listApply go 0 seen cs
+        Right cs -> listApply go 0 seen cs-}
     listApply f res s xs = foldl step (res, s) xs
       where step (acc, st) x = let (a, st') = f st x in (acc + a, st') 
 
@@ -1787,7 +1815,7 @@ svgPath = "tmp/graph.svg"
 
 genericGet :: IORef AppState
            -> Scotty.RoutePattern
-           -> ([Int] -> ConnectedMode -> TL.Text)
+           -> ([Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text)
            -> Scotty.ScottyM ()
 genericGet appStateRef index renderPage = do
   Scotty.get index $ do
@@ -1795,7 +1823,12 @@ genericGet appStateRef index renderPage = do
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
       Connected socket debuggee mode ->
-        Scotty.html $ renderPage selectedPath mode
+        case mode of 
+          PausedMode os -> do 
+            case _treeMode os of 
+               SearchedHtml (_,_,_,getName,getSize') tree _ -> do
+                 (incSize, capped) <- liftIO $ getIncSize getName getSize' tree selectedPath
+                 Scotty.html $ renderPage selectedPath (Just (incSize, capped)) mode
 
 dumpArrWord cs = do
   case cs of
@@ -1870,9 +1903,20 @@ app appStateRef = do
         case mode of 
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
-            let subtree = getSubTree tree selectedPath
+            {-let subtree = getSubTree tree selectedPath
             (expSubTree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
-            let incSize = getClosureIncSize Set.empty expSubTree
+            let incSize = getClosureIncSize
+                            (\x -> case x of
+                               (ClosureDetails _ _ _) -> Just (closureFormat x)
+                               _ -> Nothing)
+                            (\(ClosureDetails _ excSize _) -> getSize excSize) 
+                            Set.empty expSubTree-}
+            (incSize, capped) <- liftIO $ getIncSize 
+                                   (\x -> case x of
+                                     (ClosureDetails _ _ _) -> Just (closureFormat x)
+                                     _ -> Nothing)
+                                   (\(ClosureDetails _ excSize _) -> getSize excSize) 
+                                   tree selectedPath
             Scotty.html $ renderConnectedPage selectedPath (Just (incSize, capped)) socket debuggee mode
           _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee mode
       _ -> Scotty.redirect "/"
@@ -1895,9 +1939,20 @@ app appStateRef = do
         case mode of
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
-            let subtree = getSubTree tree selectedPath
+            {-let subtree = getSubTree tree selectedPath
             (expSubTree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
-            let incSize = getClosureIncSize Set.empty expSubTree
+            let incSize = getClosureIncSize
+                            (\x -> case x of
+                               (ClosureDetails _ _ _) -> Just (closureFormat x)
+                               _ -> Nothing)
+                            (\(ClosureDetails _ excSize _) -> getSize excSize) 
+                            Set.empty expSubTree-}
+            (incSize, capped) <- liftIO $ getIncSize 
+                                   (\x -> case x of
+                                     (ClosureDetails _ _ _) -> Just (closureFormat x)
+                                     _ -> Nothing)
+                                   (\(ClosureDetails _ excSize _) -> getSize excSize) 
+                                   tree selectedPath
             Scotty.html $ renderConnectedPage selectedPath (Just (incSize, capped)) socket debuggee mode
           _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee mode
   {- Toggles between socket and snapshot mode when selecting -}
@@ -2031,11 +2086,16 @@ app appStateRef = do
                     return (show i, filledC)
                   mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee (pack lbl) filledItem) filled
             let tree = mkIOTree debuggee sortedProfiles gChildren renderProfileLine id
-            let newOs = os { _treeMode = SearchedHtml (renderProfileHtml, renderProfileSummary totalStats, arrDumpProf) tree "profile" }
+            let getName = \x -> case x of
+                                  ClosureLine c -> Just (closureFormat c)
+                                  _ -> Nothing
+            let getSize' = \(ClosureLine (ClosureDetails _ excSize _)) -> getSize excSize 
+            (incSize, capped) <- liftIO $ getIncSize getName getSize' tree selectedPath
+            let newOs = os { _treeMode = SearchedHtml (renderProfileHtml, renderProfileSummary totalStats, arrDumpProf, getName, getSize') tree "profile" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderProfilePage selectedPath (_mode newMajorState)
+            Scotty.html $ renderProfilePage selectedPath (Just (incSize, capped)) (_mode newMajorState)
   {- Returns to /connect, sets the treeMode -}
   Scotty.post "/reconnect" $ do
     state <- liftIO $ readIORef appStateRef
@@ -2060,7 +2120,7 @@ app appStateRef = do
               SavedAndGCRoots _ -> do
                 let (IOTreeNode node _) = getSubTree (_treeSavedAndGCRoots os) selectedPath
                 dumpArrWord node 
-              SearchedHtml (_, _, dumper) tree _  -> do
+              SearchedHtml (_, _, dumper, _, _) tree _  -> do
                 let (IOTreeNode node _) = getSubTree tree selectedPath
                 dumper node
   {- See arr_words count -}
@@ -2094,11 +2154,17 @@ app appStateRef = do
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
             let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
-            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary words_histogram, arrDumpCount) tree "arrWordsCount" }
+            let getName = \x -> case x of
+                                  FieldLine c -> Just (closureFormat c)
+                                  _ -> Nothing
+            let getSize' = \(FieldLine (ClosureDetails _ excSize _)) -> getSize excSize 
+            (incSize, capped) <- liftIO $ getIncSize getName getSize' tree selectedPath
+
+            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary words_histogram, arrDumpCount, getName, getSize') tree "arrWordsCount" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderCountPage "ARR_WORDS" selectedPath (_mode newMajorState)
+            Scotty.html $ renderCountPage "ARR_WORDS" selectedPath (Just (incSize, capped)) (_mode newMajorState)
   {- See strings count -}
   genericGet appStateRef "/stringsCount" (renderCountPage "Strings")
   Scotty.post "/stringsCount" $ do
@@ -2126,11 +2192,17 @@ app appStateRef = do
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
             let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
-            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary Nothing, arrDumpCount) tree "stringsCount" }
+            let getName = \x -> case x of
+                                  FieldLine c -> Just (closureFormat c)
+                                  _ -> Nothing
+            let getSize' = \(FieldLine (ClosureDetails _ excSize _)) -> getSize excSize 
+            (incSize, capped) <- liftIO $ getIncSize getName getSize' tree selectedPath
+
+            let newOs = os { _treeMode = SearchedHtml (renderCountHtml, renderCountSummary Nothing, arrDumpCount, getName, getSize') tree "stringsCount" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderCountPage "Strings" selectedPath (_mode newMajorState)
+            Scotty.html $ renderCountPage "Strings" selectedPath (Just (incSize, capped)) (_mode newMajorState)
   {- Thunk analysis -}
   genericGet appStateRef "/thunkAnalysis" renderThunkAnalysisPage
   Scotty.post "/thunkAnalysis" $ do
@@ -2145,11 +2217,11 @@ app appStateRef = do
 
                 g_children _ (ThunkLine {}) = pure []
             let tree = mkIOTree debuggee top_closure g_children undefined id
-            let newOs = os { _treeMode = SearchedHtml (renderThunkAnalysisHtml, renderThunkAnalysisSummary, arrDumpThunk) tree "thunkAnalysis" }
+            let newOs = os { _treeMode = SearchedHtml (renderThunkAnalysisHtml, renderThunkAnalysisSummary, arrDumpThunk, const Nothing, const 0) tree "thunkAnalysis" }
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderThunkAnalysisPage selectedPath (_mode newMajorState)
+            Scotty.html $ renderThunkAnalysisPage selectedPath Nothing (_mode newMajorState)
   Scotty.post "/takeSnapshot" $ do
     state <- liftIO $ readIORef appStateRef
     filename <- Scotty.formParam "filename"

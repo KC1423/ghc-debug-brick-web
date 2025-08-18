@@ -144,10 +144,23 @@ data ClosureDetails = ClosureDetails
   | CCDetails Text CCPayload
   | LabelNode { _label :: Text } deriving Show
 
+data SummaryFunctions a = SummaryFunctions {
+  _renderRow :: a -> Html (),
+  _renderSummary :: a -> [Int] -> Maybe (Int, Bool) -> Html (),
+  _arrWordsDump :: a -> Web.Scotty.Internal.Types.ActionT IO (),
+  _getName :: a -> Maybe String,
+  _getSize :: a -> Int
+}
+
 data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
               | Retainer (ClosureDetails -> Widget Name) (IOTree (ClosureDetails) Name)
               | forall a . Searched (a -> Widget Name) (IOTree a Name)
-              | forall a . SearchedHtml (a -> Html (), a -> [Int] -> Html (), a -> Web.Scotty.Internal.Types.ActionT IO ()) (IOTree a Name) String
+              | forall a . SearchedHtml (a -> Html (),
+                                         a -> [Int] -> Maybe (Int, Bool) -> Html (), 
+                                         a -> Web.Scotty.Internal.Types.ActionT IO (),
+                                         a -> Maybe String,
+                                         a -> Int) 
+                                        (IOTree a Name) String
 
 treeLength :: TreeMode -> Maybe Int
 treeLength (SavedAndGCRoots {}) = Nothing
