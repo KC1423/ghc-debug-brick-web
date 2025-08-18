@@ -1355,9 +1355,7 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
       -- Left column: Summary and stop/start buttons
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
         detailedSummary renderClosureSummary tree selectedPath mInc
-        form_ [method_ "post", action_ "/img"] $ do
-          input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-          button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
+        
 
       -- Right column: Analysis buttons
       div_ [ style_ "flex: 1;" ] $ do
@@ -1405,6 +1403,9 @@ renderClosureSummary node path mInc =
         case mInc of
           Nothing -> mempty
           Just (incSize, capped) -> renderIncSize incSize capped path
+        form_ [method_ "post", action_ "/img"] $ do
+          input_ [type_ "hidden", name_ "selected", value_ (encodePath path)]
+          button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
 
     LabelNode n -> li_ $ toHtml n
     InfoDetails info -> renderInfoSummary info
@@ -1500,14 +1501,14 @@ renderIncSize incSize capped selectedPath = do
       button_ [type_ "submit", class_ "inc-button"] $ "See inclusive size"
   else mempty-}
 
-renderImgPage :: String -> [Int] -> Bool -> TL.Text
-renderImgPage name selectedPath capped =
+renderImgPage :: String -> String -> [Int] -> Bool -> TL.Text
+renderImgPage returnTo name selectedPath capped =
   renderText $ do
     h1_ $ toHtml $ "Visualisation of " ++ name
     if capped then h2_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
     body_ $ do
       let pathStr = encodePath selectedPath
-      div_ $ a_ [href_ ("/connect?selected=" <> pathStr)] $ "Return to debuggee"
+      div_ $ a_ [href_ ("/" <> pack returnTo <> "?selected=" <> pathStr)] $ "Return to debuggee"
       div_ $ a_ [ href_ "/graph"
                 , download_ "graph.svg"
                 , style_ "display: inline-block; margin-top: 1em;"
@@ -1672,17 +1673,17 @@ getClosureIncSize getName getSize' seen' node = fst (go seen' node)
 
 type EdgeList = [(String, String)]
 
-getClosureVizTree :: Set.Set String -> EdgeList -> IOTreeNode ClosureDetails name -> (Set.Set String, EdgeList)
-getClosureVizTree nodes edges (IOTreeNode n csE) =
-  let ptr = closureFormat n
+getClosureVizTree :: (a -> String) -> Set.Set String -> EdgeList -> IOTreeNode a name -> (Set.Set String, EdgeList)
+getClosureVizTree format' nodes edges (IOTreeNode n csE) = 
+  let ptr = format' n
   in if Set.member ptr nodes
      then (nodes, [])
      else case csE of
             Left _ -> (Set.insert ptr nodes, [])
             Right csE -> 
               let nodes'' = Set.insert ptr nodes
-                  (nodesFinal, childEdges) = listApply getClosureVizTree (nodes'', edges) csE
-                  children = [ closureFormat n'
+                  (nodesFinal, childEdges) = listApply (getClosureVizTree format') (nodes'', edges) csE
+                  children = [ format' n'
                              | IOTreeNode n' _ <- csE ]
                   newEdges = map (\ch -> (ptr, ch)) children
               in (nodesFinal, childEdges ++ newEdges)
@@ -1691,7 +1692,7 @@ getClosureVizTree nodes edges (IOTreeNode n csE) =
       foldl (\(nsAcc, esAcc) x ->
                let (ns', es') = f nsAcc [] x
                in (ns', esAcc ++ es')) (ns, es) xs
-getClosureVizTree nodes edges _ = (nodes, edges)
+getClosureVizTree _ nodes edges _ = (nodes, edges)
 
 renderBytesHtml :: Real a => a -> String
 renderBytesHtml n = getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes))
@@ -1997,23 +1998,37 @@ app appStateRef = do
   {- Creates and displays the graph for the selected object -}
   Scotty.post "/img" $ do
     state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.formParam
     case state ^. majorState of
       Connected socket debuggee mode ->
         case mode of
           PausedMode os -> do
-            selectedPath <- selectedParam Scotty.formParam
-            let tree = _treeSavedAndGCRoots os
-            let subtree = getSubTree tree selectedPath
-            (expSubtree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
-            let name = getNodeName subtree
-            let (nodes', vizEdges) = getClosureVizTree Set.empty [] expSubtree
-            let vizNodes = Set.toList nodes'
-            liftIO $ do
-              createDirectoryIfMissing True "tmp"
-              let graph = buildClosureGraph vizNodes vizEdges
-              _ <- runGraphviz graph Svg svgPath
-              return ()
-            Scotty.html $ renderImgPage name selectedPath capped
+            case _treeMode os of
+              SavedAndGCRoots _ -> do
+                let tree = _treeSavedAndGCRoots os
+                let subtree = getSubTree tree selectedPath
+                (expSubtree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
+                let name = getNodeName subtree
+                let (nodes', vizEdges) = getClosureVizTree closureFormat Set.empty [] expSubtree
+                let vizNodes = Set.toList nodes'
+                liftIO $ do
+                  createDirectoryIfMissing True "tmp"
+                  let graph = buildClosureGraph vizNodes vizEdges
+                  _ <- runGraphviz graph Svg svgPath
+                  return ()
+                Scotty.html $ renderImgPage "connect" name selectedPath capped
+              SearchedHtml Utils{..} tree name' -> do
+                let subtree@(IOTreeNode n' _) = getSubTree tree selectedPath
+                (expSubtree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . _getName)
+                let name = maybe "" id $ _getName n'
+                let (nodes', vizEdges) = getClosureVizTree (maybe "" id . _getName) Set.empty [] expSubtree
+                let vizNodes = Set.toList nodes'
+                liftIO $ do
+                  createDirectoryIfMissing True "tmp"
+                  let graph = buildClosureGraph vizNodes vizEdges
+                  _ <- runGraphviz graph Svg svgPath
+                  return ()
+                Scotty.html $ renderImgPage name' name selectedPath capped
   {- View profile (level 1 and 2) -}
   genericGet appStateRef "/profile" renderProfilePage
   Scotty.post "/profile" $ do
