@@ -1380,9 +1380,9 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
                 , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
             input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot filename", required_ "required"]
             button_ [type_ "submit"] "Take snapshot"
-          {-form_ [ method_ "post", action_ "/searchWithfilters"
+          form_ [ method_ "post", action_ "/searchWithFilters"
                 , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "Search with current filters"-}
+            button_ [type_ "submit"] "Search with current filters"
 
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
@@ -1558,6 +1558,52 @@ renderThunkAnalysisPage selectedPath mInc mode = renderText $ case mode of
         h1_ "Thunk analysis"
         reconnectLink
         genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
+
+renderFilterSearchPage :: [Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text
+renderFilterSearchPage selectedPath mInc mode = renderText $ case mode of
+  PausedMode os -> do
+    case _treeMode os of
+      Retainer _ tree -> do
+        h1_ "Results for search with filters: "
+        {-form_ [method_ "post", action_ "/modifyFilters"] $
+          button_ "Modify filters"-}
+        reconnectLink
+        div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
+          -- Left column: Line summary
+          div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
+            h3_ "Selection: "
+            ul_ $ detailedSummary renderClosureSummary tree selectedPath mInc
+        
+          -- Right column: List of filters
+          div_ [ style_ "flex: 1;" ] $ do
+            h3_ "Filters: "
+            ul_ $ li_ "watch this space"
+
+
+        renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
+        autoScrollScript
+
+renderModifyFilterPage :: ConnectedMode -> TL.Text
+renderModifyFilterPage mode = renderText $ case mode of
+  PausedMode os -> do
+    h1_ "modify filters here"
+    div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
+      -- Left column: List of filters
+      div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
+        h3_ "Current filters: "
+        ul_ $ li_ "watch this space"
+      
+      -- Right column: Buttons to modify filters
+      div_ [ style_ "flex: 1;" ] $ do
+        --ul_ $ li_ "buttons here"
+        -- IDEA: Use the same format as 'take snapshot'
+        form_ [ method_ "post", action_ "/addFilter"
+            , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+          input_ [type_ "text", name_ "filename", placeholder_ "Enter constructor name", required_ "required"]
+          button_ [type_ "submit"] "Add filter for constructor name"
+ 
+
+        
         
 detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
 detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
@@ -2006,6 +2052,13 @@ app appStateRef = do
             let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
+          Retainer f tree -> do
+            newTree <- liftIO $ toggleTreeByPath tree toggleIx
+            let newOs = os { _treeMode = Retainer f newTree }
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
           SearchedHtml f tree name -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
             let newOs = os { _treeMode = SearchedHtml f newTree name }
@@ -2026,6 +2079,8 @@ app appStateRef = do
               SavedAndGCRoots _ -> do
                 let tree = _treeSavedAndGCRoots os
                 handleImg tree getNodeName "connect" closureFormat selectedPath
+              Retainer _ tree -> do
+                handleImg tree getNodeName "searchWithFilters" closureFormat selectedPath
               SearchedHtml Utils{..} tree pageName -> do
                 let nameFn = maybe "" id . _getName 
                 handleImg tree (\(IOTreeNode n' _) -> nameFn n') pageName nameFn selectedPath
@@ -2091,6 +2146,9 @@ app appStateRef = do
               SavedAndGCRoots _ -> do
                 let (IOTreeNode node _) = getSubTree (_treeSavedAndGCRoots os) selectedPath
                 dumpArrWord node 
+              Retainer _ tree -> do
+                let (IOTreeNode node _) = getSubTree tree selectedPath
+                dumpArrWord node
               SearchedHtml Utils{..} tree _  -> do
                 let (IOTreeNode node _) = getSubTree tree selectedPath
                 _dumpArrWords node
@@ -2203,7 +2261,48 @@ app appStateRef = do
       Connected socket debuggee mode -> do
         liftIO $ snapshot debuggee filename
         Scotty.redirect "/connect"
-   
+  {- Search with filters -}
+  Scotty.get "/searchWithFilters" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode -> do
+        case mode of
+          PausedMode os -> do
+            case _treeMode os of
+              Retainer _ tree -> do
+                let getName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
+                let getSize' x = case x of ClosureDetails _ excSize _ -> getSize excSize
+                inc <- liftIO $ getIncSize getName getSize' tree selectedPath
+                Scotty.html $ renderFilterSearchPage selectedPath (Just inc) mode
+  Scotty.post "/searchWithFilters" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        case mode of
+          PausedMode os -> do
+            let mClosFilter = uiFiltersToFilter (_filters os)
+            cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee
+            let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
+            res <- liftIO $ mapM (mapM (completeClosureDetails debuggee)) cps'
+            let tree = mkRetainerTree debuggee res
+            let newOs = os { _treeMode = Retainer renderClosureDetails tree }
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            let getName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
+            let getSize' x = case x of ClosureDetails _ excSize _ -> getSize excSize
+            inc <- liftIO $ getIncSize getName getSize' tree selectedPath
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.html $ renderFilterSearchPage selectedPath (Just inc) (_mode newMajorState)
+  Scotty.post "/modifyFilters" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        Scotty.html $ renderModifyFilterPage mode
+
+     
   where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
