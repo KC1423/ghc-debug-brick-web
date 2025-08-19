@@ -1841,6 +1841,22 @@ handleConnect appStateRef state formValue options isValid connect = do
         else Scotty.html renderBadSocketPage
     Nothing -> Scotty.html renderBadSocketPage
 
+handleImg :: IOTree a name -> (IOTreeNode a name -> String) -> String -> (a -> String) -> [Int] -> Scotty.ActionM ()
+handleImg tree nodeName pageName format' selectedPath = do
+  let subtree = getSubTree tree selectedPath
+  (expSubtree, capped) <- liftIO $ expandNodeSafe subtree format'
+  let name = nodeName subtree
+  let (nodes', vizEdges) = getClosureVizTree format' Set.empty [] expSubtree
+  let vizNodes = Set.toList nodes'
+  liftIO $ do
+    createDirectoryIfMissing True "tmp"
+    let graph = buildClosureGraph vizNodes vizEdges
+    _ <- runGraphviz graph Svg svgPath
+    return ()
+  Scotty.html $ renderImgPage pageName name selectedPath capped
+
+  
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
@@ -2006,29 +2022,10 @@ app appStateRef = do
             case _treeMode os of
               SavedAndGCRoots _ -> do
                 let tree = _treeSavedAndGCRoots os
-                let subtree = getSubTree tree selectedPath
-                (expSubtree, capped) <- liftIO $ expandNodeSafe subtree closureFormat
-                let name = getNodeName subtree
-                let (nodes', vizEdges) = getClosureVizTree closureFormat Set.empty [] expSubtree
-                let vizNodes = Set.toList nodes'
-                liftIO $ do
-                  createDirectoryIfMissing True "tmp"
-                  let graph = buildClosureGraph vizNodes vizEdges
-                  _ <- runGraphviz graph Svg svgPath
-                  return ()
-                Scotty.html $ renderImgPage "connect" name selectedPath capped
-              SearchedHtml Utils{..} tree name' -> do
-                let subtree@(IOTreeNode n' _) = getSubTree tree selectedPath
-                (expSubtree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . _getName)
-                let name = maybe "" id $ _getName n'
-                let (nodes', vizEdges) = getClosureVizTree (maybe "" id . _getName) Set.empty [] expSubtree
-                let vizNodes = Set.toList nodes'
-                liftIO $ do
-                  createDirectoryIfMissing True "tmp"
-                  let graph = buildClosureGraph vizNodes vizEdges
-                  _ <- runGraphviz graph Svg svgPath
-                  return ()
-                Scotty.html $ renderImgPage name' name selectedPath capped
+                handleImg tree getNodeName "connect" closureFormat selectedPath
+              SearchedHtml Utils{..} tree pageName -> do
+                let nameFn = maybe "" id . _getName 
+                handleImg tree (\(IOTreeNode n' _) -> nameFn n') pageName nameFn selectedPath
   {- View profile (level 1 and 2) -}
   genericGet appStateRef "/profile" renderProfilePage
   Scotty.post "/profile" $ do
