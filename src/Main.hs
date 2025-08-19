@@ -1351,7 +1351,7 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
 
-    div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
+    div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start; margin-bottom: 0.25rem;" ] $ do
       -- Left column: Summary and stop/start buttons
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
         detailedSummary renderClosureSummary tree selectedPath mInc
@@ -1359,27 +1359,30 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
 
       -- Right column: Analysis buttons
       div_ [ style_ "flex: 1;" ] $ do
-        div_ [style_ "position: absolute; top: 50px; right: 10px;"] $ do
+        div_ [ style_ "margin: 0; display: flex; flex-direction: column; gap: 0.25rem;" ] $ do
+          --div_ [style_ "position: absolute; top: 50px; right: 10px;"] $ do
           form_ [ method_ "post", action_ "/profile"
-                , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
             button_ [type_ "submit"] (toHtml ("View profile" :: Text))
             select_ [name_ "profileLevel"] $ do
               option_ [value_ "1"] (toHtml ("Level one" :: Text))
               option_ [value_ "2"] (toHtml ("Level two" :: Text))
           form_ [ method_ "post", action_ "/arrWordsCount"
-                , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
             button_ [type_ "submit"] "View ARR_WORDS count"
           form_ [ method_ "post", action_ "/stringsCount"
-                , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
             button_ [type_ "submit"] "View strings count"
           form_ [ method_ "post", action_ "/thunkAnalysis"
-                , style_ "display: flex; align-items: center; gap: 8px;"] $ do
+                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
             button_ [type_ "submit"] "View thunk analysis"
           form_ [ method_ "post", action_ "/takeSnapshot"
-                , style_ "display: flex; align-items: center; gap: 8px; margin-top: 20px;"] $ do
+                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
             input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot filename", required_ "required"]
             button_ [type_ "submit"] "Take snapshot"
-          --form_ [ method_ "post", action_ "/modifyfilters"]
+          {-form_ [ method_ "post", action_ "/searchWithfilters"
+                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+            button_ [type_ "submit"] "Search with current filters"-}
 
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
