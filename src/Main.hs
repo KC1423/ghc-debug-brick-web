@@ -1373,6 +1373,13 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
           form_ [ method_ "post", action_ "/searchWithFilters"
                 , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
             button_ [type_ "submit"] "Search with current filters"
+          form_ [ method_ "post", action_ "/setSearchLimit"
+                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+            input_ [type_ "text", name_ "index", placeholder_ "Enter search limit", required_ "required"]
+
+            input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+            button_ [type_ "submit"] "Limit searches"
+
 
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
@@ -2388,8 +2395,22 @@ app appStateRef = do
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/modifyFilters"
+  Scotty.post "/setSearchLimit" $ do
+    state <- liftIO $ readIORef appStateRef
+    index <- indexParam Scotty.formParam
+    case state ^. majorState of 
+      Connected socket debuggee mode -> 
+        case mode of
+          PausedMode os -> do
+            let newResultSize = case index of
+                                  n | n <= 0 -> Nothing
+                                  n -> Just n
+            let newOs = os { _resultSize = newResultSize } 
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect "/connect"
 
-     
   where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
