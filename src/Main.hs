@@ -987,13 +987,13 @@ dispatchFooterInput :: Debuggee
                     -> FooterInputMode
                     -> Form Text () Name
                     -> EventM n OperationalState ()
--- Incomplete
+-- DONE
 dispatchFooterInput dbg (FClosureAddress runf invert) form   = filterOrRun dbg form runf readClosurePtr (pure . UIAddressFilter invert)
--- Incomplete
+-- DONE
 dispatchFooterInput dbg (FInfoTableAddress runf invert) form = filterOrRun dbg form runf readInfoTablePtr (pure . UIInfoAddressFilter invert)
--- Incomplete
+-- DONE
 dispatchFooterInput dbg (FConstructorName runf invert) form  = filterOrRun dbg form runf Just (pure . UIConstructorFilter invert)
--- Incomplete
+-- DONE
 dispatchFooterInput dbg (FClosureName runf invert) form      = filterOrRun dbg form runf Just (pure . UIInfoNameFilter invert)
 -- Incomplete
 dispatchFooterInput dbg FArrWordsSize form                  = filterOrRun dbg form True readMaybe (\size -> [UIClosureTypeFilter False Debug.ARR_WORDS, UISizeFilter False size])
@@ -1379,6 +1379,8 @@ renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case m
           form_ [ method_ "post", action_ "/takeSnapshot"
                 , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
             input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot filename", required_ "required"]
+
+            input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
             button_ [type_ "submit"] "Take snapshot"
           form_ [ method_ "post", action_ "/searchWithFilters"
                 , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
@@ -1525,6 +1527,7 @@ reconnectLink = do
             , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
             ] "Return to saved objects and GC roots"
 
+
 genericTreeBody tree selectedPath renderRow renderSummary' name mInc = do
   detailedSummary renderSummary' tree selectedPath mInc
   h3_ "Results"
@@ -1565,8 +1568,8 @@ renderFilterSearchPage selectedPath mInc mode = renderText $ case mode of
     case _treeMode os of
       Retainer _ tree -> do
         h1_ "Results for search with filters: "
-        {-form_ [method_ "post", action_ "/modifyFilters"] $
-          button_ "Modify filters"-}
+        form_ [method_ "post", action_ "/modifyFilters"] $
+          button_ "Modify filters"
         reconnectLink
         div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
           -- Left column: Line summary
@@ -1579,7 +1582,6 @@ renderFilterSearchPage selectedPath mInc mode = renderText $ case mode of
             h3_ "Filters: "
             ul_ $ li_ "watch this space"
 
-
         renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
         autoScrollScript
 
@@ -1587,6 +1589,14 @@ renderModifyFilterPage :: ConnectedMode -> TL.Text
 renderModifyFilterPage mode = renderText $ case mode of
   PausedMode os -> do
     h1_ "modify filters here"
+     
+    div_ $ form_ [method_ "post", action_ "/searchWithFilters", style_ "display:inline"] $
+      button_ [ type_ "submit"
+              , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
+              ] "Return to search page"
+
+
+
     div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
       -- Left column: List of filters
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
@@ -1595,13 +1605,23 @@ renderModifyFilterPage mode = renderText $ case mode of
       
       -- Right column: Buttons to modify filters
       div_ [ style_ "flex: 1;" ] $ do
-        --ul_ $ li_ "buttons here"
-        -- IDEA: Use the same format as 'take snapshot'
-        form_ [ method_ "post", action_ "/addFilter"
-            , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-          input_ [type_ "text", name_ "filename", placeholder_ "Enter constructor name", required_ "required"]
-          button_ [type_ "submit"] "Add filter for constructor name"
- 
+        genFilterButtons "Enter closure address" "Address" 
+        genFilterButtons "Enter info table address" "InfoAddress" 
+        genFilterButtons "Enter constructor name" "ConstrName"
+        genFilterButtons "Enter closure name" "ClosureName"
+        genFilterButtons "Enter closure size (B)" "ClosureSize"
+        genFilterButtons "Enter closure type" "ClosureType"
+  
+
+genFilterButtons :: String -> String -> Html ()
+genFilterButtons flavourText filterType = do
+ form_ [ method_ "post", action_ "/addFilter"
+       , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+     input_ [type_ "text", name_ "pattern", placeholder_ (pack flavourText), required_ "required"]
+     input_ [type_ "hidden", name_ "filterType", value_ (pack filterType)]
+     button_ [type_ "submit", name_ "invert", value_ "False"] "Add filter"
+     button_ [type_ "submit", name_ "invert", value_ "True"] "Exclude"
+
 
         
         
@@ -1800,6 +1820,9 @@ readParam name getParam f def = do
 selectedParam getParam = readParam "selected" getParam parsePath "0"
 togglePathParam getParam = readParam "toggle" getParam parsePath ""
 profileLevelParam getParam = readParam "profileLevel" getParam parseProfileLevel "1" 
+filterTypeParam getParam = readParam "filterType" getParam id ""
+patternParam getParam = readParam "pattern" getParam id ""
+invertParam getParam = readParam "invert" getParam (read :: String -> Bool) "False"
 
 buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
@@ -2256,11 +2279,12 @@ app appStateRef = do
   {- Take snapshot -}
   Scotty.post "/takeSnapshot" $ do
     state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.formParam
     filename <- Scotty.formParam "filename"
     case state ^. majorState of
       Connected socket debuggee mode -> do
         liftIO $ snapshot debuggee filename
-        Scotty.redirect "/connect"
+        Scotty.redirect ("/connect?selected=" <> TL.fromStrict (encodePath selectedPath))
   {- Search with filters -}
   Scotty.get "/searchWithFilters" $ do
     state <- liftIO $ readIORef appStateRef
@@ -2295,13 +2319,39 @@ app appStateRef = do
             inc <- liftIO $ getIncSize getName getSize' tree selectedPath
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderFilterSearchPage selectedPath (Just inc) (_mode newMajorState)
+  Scotty.get "/modifyFilters" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee mode ->
+        Scotty.html $ renderModifyFilterPage mode
   Scotty.post "/modifyFilters" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
       Connected socket debuggee mode ->
         Scotty.html $ renderModifyFilterPage mode
-
+  Scotty.post "/addFilter" $ do
+    state <- liftIO $ readIORef appStateRef
+    pattern :: String <- patternParam Scotty.formParam
+    filterType :: String <- filterTypeParam Scotty.formParam
+    invert <- invertParam Scotty.formParam
+    case state ^. majorState of 
+      Connected socket debuggee mode -> 
+        case mode of
+          PausedMode os -> do
+            let newFilter = case filterType of 
+                              "Address" -> maybe [] (pure . UIAddressFilter invert) (readClosurePtr pattern)
+                              "InfoAddress" -> maybe [] (pure . UIInfoAddressFilter invert) (readInfoTablePtr pattern) 
+                              "ConstrName" -> [UIConstructorFilter invert pattern]
+                              "ClosureName" -> [UIInfoNameFilter invert pattern]
+                              "ClosureSize" -> maybe [] (pure . UISizeFilter invert) (readMaybe pattern) 
+                              "ClosureType" -> maybe [] (pure . UIClosureTypeFilter invert) (readMaybe pattern) 
+            let newOs = addFilters newFilter os  
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect "/modifyFilters"
      
   where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
