@@ -221,6 +221,11 @@ isCmdEnabled debuggeeVersion cmd = case commandRequiresProfMode cmd of
   ReqSomeProfiling ->
     GD.isProfiledRTS debuggeeVersion
 
+inEraMode :: OperationalState -> Bool
+inEraMode os = Just GD.EraProfiling == GD.v_profiling (_version os)
+inSomeProfMode :: OperationalState -> Bool
+inSomeProfMode os = GD.isProfiledRTS (_version os)
+
 isCmdDisabled :: GD.Version -> Command -> Bool
 isCmdDisabled v cmd = not $ isCmdEnabled v cmd
 

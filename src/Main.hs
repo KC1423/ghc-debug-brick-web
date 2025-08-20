@@ -98,7 +98,7 @@ mainBorder :: Text -> Widget a -> Widget a
 mainBorder title w = -- borderWithLabel (txt title) . padAll 1
   vLimit 1 (withAttr menuAttr $ hCenter $ fill ' ' <+> txt title <+> fill ' ') <=> w
 
--- STATUS: Incomplete
+-- STATUS: Design
 myAppDraw :: AppState -> [Widget Name]
 myAppDraw (AppState majorState' _) =
     case majorState' of
@@ -255,7 +255,7 @@ labelled' :: Int -> Text -> Widget Name -> Widget Name
 labelled' leftSize lbl w =
   hLimit leftSize  (txtLabel lbl <+> vLimit 1 (fill ' ')) <+> w <+> vLimit 1 (fill ' ')
 
--- STATUS: Incomplete (DONE for most cases)
+-- STATUS: DONE
 renderUIFilter :: UIFilter -> Widget Name
 renderUIFilter (UIAddressFilter invert x)     = labelled (bool "" "!" invert <> "Closure address") (str (show x))
 renderUIFilter (UIInfoAddressFilter invert x) = labelled (bool "" "!" invert <> "Info table address") (str (show x))
@@ -561,7 +561,7 @@ getClosureDetails debuggee' label' (ListFullClosure c) = do
     , _excSize = excSize'
     }
 
--- STATUS: Incomplete (unsure)
+-- STATUS: Done (in use)
 getInfoInfo :: Debuggee -> Text -> InfoTablePtr -> IO InfoInfo
 getInfoInfo debuggee' label' infoPtr = do
 
@@ -579,7 +579,7 @@ getInfoInfo debuggee' label' infoPtr = do
       }
 
 
--- STATUS: Incomplete
+-- STATUS: Design
 -- Event handling when the main window has focus
 handleMain :: Debuggee -> Handler Event OperationalState
 handleMain dbg e = do
@@ -649,7 +649,7 @@ handleMain dbg e = do
           _ -> handleMainWindowEvent dbg (() <$ e)
     _ -> return ()
 
--- STATUS: Incomplete
+-- STATUS: Design
 commandPickerMode :: OverlayMode
 commandPickerMode =
   CommandPicker
@@ -665,15 +665,15 @@ savedAndGCRoots = SavedAndGCRoots renderClosureDetails
 -- Commands and Shortcut constants
 -- ----------------------------------------------------------------------------
 
--- STATUS: Incomplete
+-- STATUS: Design
 invertFilterEvent :: Vty.Event
 invertFilterEvent = Vty.EvKey (KChar 'g') [Vty.MCtrl]
 
--- STATUS: Incomplete
+-- STATUS: Design
 isInvertFilterEvent :: Vty.Event -> Bool
 isInvertFilterEvent = (invertFilterEvent ==)
 
--- STATUS: Incomplete
+-- STATUS: Design
 -- All the commands which we support, these show up in keybindings and also the command picker
 commandList :: Seq.Seq Command
 commandList =
@@ -721,7 +721,7 @@ commandList =
 
     withCtrlKey char = Vty.EvKey (KChar char) [Vty.MCtrl]
 
--- STATUS: Incomplete
+-- STATUS: Design
 findCommand :: Vty.Event -> Maybe Command
 findCommand event = do
   i <- Seq.findIndexL (\cmd -> commandKey cmd == Just event) commandList
@@ -732,7 +732,7 @@ findCommand event = do
 -- Window Management
 -- ----------------------------------------------------------------------------
 
--- STATUS: Incomplete
+-- STATUS: Design
 handleMainWindowEvent :: Debuggee
                       -> Handler () OperationalState
 handleMainWindowEvent dbg brickEvent = do
@@ -981,31 +981,21 @@ renderProfileLine (ProfileLine k kargs c) =
     avgSizeColor = Vty.RGBColor 0xAB 0x4D 0xE0
 
 
--- STATUS: Incomplete
+-- STATUS: Incomplete (just search limit is left)
 -- | What happens when we press enter in footer input mode
 dispatchFooterInput :: Debuggee
                     -> FooterInputMode
                     -> Form Text () Name
                     -> EventM n OperationalState ()
--- DONE
 dispatchFooterInput dbg (FClosureAddress runf invert) form   = filterOrRun dbg form runf readClosurePtr (pure . UIAddressFilter invert)
--- DONE
 dispatchFooterInput dbg (FInfoTableAddress runf invert) form = filterOrRun dbg form runf readInfoTablePtr (pure . UIInfoAddressFilter invert)
--- DONE
 dispatchFooterInput dbg (FConstructorName runf invert) form  = filterOrRun dbg form runf Just (pure . UIConstructorFilter invert)
--- DONE
 dispatchFooterInput dbg (FClosureName runf invert) form      = filterOrRun dbg form runf Just (pure . UIInfoNameFilter invert)
--- Incomplete
 dispatchFooterInput dbg FArrWordsSize form                  = filterOrRun dbg form True readMaybe (\size -> [UIClosureTypeFilter False Debug.ARR_WORDS, UISizeFilter False size])
--- Incomplete
 dispatchFooterInput dbg (FFilterEras runf invert) form       = filterOrRun dbg form runf (parseEraRange . T.pack) (pure . UIEraFilter invert)
--- DONE
 dispatchFooterInput dbg (FFilterClosureSize invert) form = filterOrRun dbg form False readMaybe (pure . UISizeFilter invert)
--- DONE
 dispatchFooterInput dbg (FFilterClosureType invert) form = filterOrRun dbg form False readMaybe (pure . UIClosureTypeFilter invert)
--- Incomplete
 dispatchFooterInput dbg (FFilterCcId runf invert) form = filterOrRun dbg form runf readMaybe (pure . UICcId invert)
--- DONE
 dispatchFooterInput dbg (FProfile lvl) form = do
    outside_os <- get
 
@@ -1053,7 +1043,6 @@ dispatchFooterInput dbg (FProfile lvl) form = do
     put (os & resetFooter
             & treeMode .~ Searched renderWithStats tree
         )
--- DONE (although consider making this accessible from profile page etc.)
 dispatchFooterInput _ FDumpArrWords form = do
    os <- get
    let act node = asyncAction_ "dumping ARR_WORDS payload" os $
@@ -1075,7 +1064,6 @@ dispatchFooterInput _ FSetResultSize form = do
          | n <= 0 -> put (os & resultSize .~ Nothing)
          | otherwise -> put (os & resultSize .~ (Just n))
        Nothing -> pure ()
--- DONE
 dispatchFooterInput dbg FSnapshot form = do
    os <- get
    asyncAction_ "Taking snapshot" os $ snapshot dbg (T.unpack (formState form))
@@ -1185,7 +1173,7 @@ highlighted = forceAttr highlightAttr
 disabledMenuItem :: Widget n -> Widget n
 disabledMenuItem = forceAttr disabledMenuAttr
 
--- STATUS: Incomplete
+-- STATUS: Design
 myAppHandleEvent :: BrickEvent Name Event -> EventM Name AppState ()
 myAppHandleEvent brickEvent = do
   appState@(AppState majorState' eventChan) <- get
@@ -1613,17 +1601,20 @@ renderModifyFilterPage mode = renderText $ case mode of
         genFilterButtons "Enter closure name" "ClosureName"
         genFilterButtons "Enter closure size (B)" "ClosureSize"
         genFilterButtons "Enter closure type" "ClosureType"
-  
+        genFilterButtonsNoExclude "Enter ARR_WORDS size (B)" "ARR_WORDSSize"
+        if inEraMode os then genFilterButtons "Enter era" "Era" else mempty
+        if inSomeProfMode os then genFilterButtons "Enter cost centre id" "CCID" else mempty
 
-genFilterButtons :: String -> String -> Html ()
-genFilterButtons flavourText filterType = do
+genFilterButtons = genFilterButtons' True
+genFilterButtonsNoExclude = genFilterButtons' False
+genFilterButtons' :: Bool -> String -> String -> Html ()
+genFilterButtons' exclude flavourText filterType = do
  form_ [ method_ "post", action_ "/addFilter"
        , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
      input_ [type_ "text", name_ "pattern", placeholder_ (pack flavourText), required_ "required"]
      input_ [type_ "hidden", name_ "filterType", value_ (pack filterType)]
      button_ [type_ "submit", name_ "invert", value_ "False"] "Add filter"
-     button_ [type_ "submit", name_ "invert", value_ "True"] "Exclude"
-
+     if exclude then button_ [type_ "submit", name_ "invert", value_ "True"] "Exclude" else mempty
 
         
         
@@ -1774,8 +1765,10 @@ renderUIFilterHtml (UIAddressFilter inv x) = renderUIFLine inv "Closure address"
 renderUIFilterHtml (UIInfoAddressFilter inv x) = renderUIFLine inv "Info table address" show x
 renderUIFilterHtml (UIConstructorFilter inv x) = renderUIFLine inv "Constructor name" id x
 renderUIFilterHtml (UIInfoNameFilter inv x) = renderUIFLine inv "Constructor name (exact)" id x
+renderUIFilterHtml (UIEraFilter inv x) = renderUIFLine inv "Era range" showEraRange x
 renderUIFilterHtml (UISizeFilter inv x) = renderUIFLine inv "Size (lower bound)" (show . getSize) x
 renderUIFilterHtml (UIClosureTypeFilter inv x) = renderUIFLine inv "Closure type" show x
+renderUIFilterHtml (UICcId inv x) = renderUIFLine inv "CC Id" show x
 renderUIFLine :: Bool -> String -> (a -> String) -> a -> Int -> Html ()
 renderUIFLine inv desc show' x (-1) = 
   li_ $ toHtml $ (bool "" "!" inv) <> desc <> ": " <> show' x 
@@ -2371,6 +2364,12 @@ app appStateRef = do
                               "ClosureName" -> [UIInfoNameFilter invert pattern]
                               "ClosureSize" -> maybe [] (pure . UISizeFilter invert) (readMaybe pattern) 
                               "ClosureType" -> maybe [] (pure . UIClosureTypeFilter invert) (readMaybe pattern) 
+                              "ARR_WORDSSize" -> maybe [] (\size -> 
+                                                          [UIClosureTypeFilter False Debug.ARR_WORDS
+                                                          , UISizeFilter False size]) 
+                                                          (readMaybe pattern) 
+                              "Era" -> maybe [] (pure . UIEraFilter invert) (parseEraRange $ T.pack pattern)
+                              "CCID" -> maybe [] (pure . UICcId invert) (readMaybe pattern) 
             let newOs = addFilters newFilter os  
                 newMajorState = Connected socket debuggee (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
