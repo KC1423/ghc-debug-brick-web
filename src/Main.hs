@@ -255,7 +255,7 @@ labelled' :: Int -> Text -> Widget Name -> Widget Name
 labelled' leftSize lbl w =
   hLimit leftSize  (txtLabel lbl <+> vLimit 1 (fill ' ')) <+> w <+> vLimit 1 (fill ' ')
 
--- STATUS: Incomplete (not started)
+-- STATUS: Incomplete (DONE for most cases)
 renderUIFilter :: UIFilter -> Widget Name
 renderUIFilter (UIAddressFilter invert x)     = labelled (bool "" "!" invert <> "Closure address") (str (show x))
 renderUIFilter (UIInfoAddressFilter invert x) = labelled (bool "" "!" invert <> "Info table address") (str (show x))
@@ -923,7 +923,7 @@ thunkAnalysisAction dbg = do
         )
 
 
--- STATUS: Incomplete
+-- STATUS: Done
 searchWithCurrentFilters :: Debuggee -> EventM n OperationalState ()
 searchWithCurrentFilters dbg = do
   outside_os <- get
@@ -937,12 +937,12 @@ searchWithCurrentFilters dbg = do
             & treeMode .~ Retainer renderClosureDetails tree
         )
 
--- STATUS: Incomplete
+-- STATUS: Done (kind of)
 filterOrRun :: Debuggee -> Form Text () Name -> Bool -> (String -> Maybe a) -> (a -> [UIFilter]) -> EventM n OperationalState ()
 filterOrRun dbg form doRun parse createFilter =
   filterOrRunM dbg form doRun parse (pure . createFilter)
 
--- STATUS: Incomplete
+-- STATUS: Done (kind of)
 filterOrRunM :: Debuggee -> Form Text () Name -> Bool -> (String -> Maybe a) -> (a -> EventM n OperationalState [UIFilter]) -> EventM n OperationalState ()
 filterOrRunM dbg form doRun parse createFilterM = do
   case parse (T.unpack (formState form)) of
@@ -999,9 +999,9 @@ dispatchFooterInput dbg (FClosureName runf invert) form      = filterOrRun dbg f
 dispatchFooterInput dbg FArrWordsSize form                  = filterOrRun dbg form True readMaybe (\size -> [UIClosureTypeFilter False Debug.ARR_WORDS, UISizeFilter False size])
 -- Incomplete
 dispatchFooterInput dbg (FFilterEras runf invert) form       = filterOrRun dbg form runf (parseEraRange . T.pack) (pure . UIEraFilter invert)
--- Incomplete
+-- DONE
 dispatchFooterInput dbg (FFilterClosureSize invert) form = filterOrRun dbg form False readMaybe (pure . UISizeFilter invert)
--- Incomplete
+-- DONE
 dispatchFooterInput dbg (FFilterClosureType invert) form = filterOrRun dbg form False readMaybe (pure . UIClosureTypeFilter invert)
 -- Incomplete
 dispatchFooterInput dbg (FFilterCcId runf invert) form = filterOrRun dbg form runf readMaybe (pure . UICcId invert)
@@ -1100,7 +1100,7 @@ asyncAction desc os action final = do
     eventChan = view event_chan os
 
 
--- STATUS: Incomplete
+-- STATUS: Done
 mkRetainerTree :: Debuggee -> [[ClosureDetails]] -> IOTree ClosureDetails Name
 mkRetainerTree dbg stacks = do
   let stack_map = [ (cp, rest) | stack <- stacks, Just (cp, rest) <- [List.uncons stack]]
@@ -1421,12 +1421,16 @@ renderClosureSummary node path mInc =
       renderCC ccsCc
     CCDetails _ c -> renderCC c
 
-detailedSummary :: (Ord name, Show name) => (a -> [Int] -> Maybe (Int, Bool) -> Html ()) -> IOTree a name -> [Int] ->
-                   Maybe (Int, Bool) -> Html ()
-detailedSummary f tree path mInc =
+detailedSummary :: (Ord name, Show name)
+                => (a -> [Int] -> Maybe (Int, Bool) -> Html ())
+                -> IOTree a name -> [Int] -> Maybe (Int, Bool) -> Html ()
+detailedSummary f tree@(IOTree _ roots _ _ _) path mInc =
   div_ [class_ "selection-summary"] $ do
-    let (IOTreeNode node _) = getSubTree tree path
-    f node path mInc
+    if null roots 
+      then mempty
+      else do 
+        let (IOTreeNode node _) = getSubTree tree path
+        f node path mInc
 
 summaryEntry :: (Monad m, Term (HtmlT m ()) result, ToHtml a) => HtmlT m () -> a -> result
 summaryEntry title value = li_ $ strong_ (title <> ": ") >> toHtml value
@@ -1567,9 +1571,7 @@ renderFilterSearchPage selectedPath mInc mode = renderText $ case mode of
   PausedMode os -> do
     case _treeMode os of
       Retainer _ tree -> do
-        h1_ "Results for search with filters: "
-        form_ [method_ "post", action_ "/modifyFilters"] $
-          button_ "Modify filters"
+        h1_ "Results for search with filters"
         reconnectLink
         div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
           -- Left column: Line summary
@@ -1579,8 +1581,11 @@ renderFilterSearchPage selectedPath mInc mode = renderText $ case mode of
         
           -- Right column: List of filters
           div_ [ style_ "flex: 1;" ] $ do
-            h3_ "Filters: "
-            ul_ $ li_ "watch this space"
+            form_ [ method_ "post", action_ "/modifyFilters"
+                  , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+              h3_ "Filters: "
+              button_ "Modify filters"
+            ul_ [style_ "margin-top: 0.25rem;"] $ plainUIFilters (_filters os)
 
         renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
         autoScrollScript
@@ -1588,7 +1593,7 @@ renderFilterSearchPage selectedPath mInc mode = renderText $ case mode of
 renderModifyFilterPage :: ConnectedMode -> TL.Text
 renderModifyFilterPage mode = renderText $ case mode of
   PausedMode os -> do
-    h1_ "modify filters here"
+    h1_ "Modify filters"
      
     div_ $ form_ [method_ "post", action_ "/searchWithFilters", style_ "display:inline"] $
       button_ [ type_ "submit"
@@ -1596,12 +1601,11 @@ renderModifyFilterPage mode = renderText $ case mode of
               ] "Return to search page"
 
 
-
     div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
       -- Left column: List of filters
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
         h3_ "Current filters: "
-        ul_ $ li_ "watch this space"
+        ul_ $ mapM_ (uncurry renderUIFilterHtml) (zip (_filters os) [0..])
       
       -- Right column: Buttons to modify filters
       div_ [ style_ "flex: 1;" ] $ do
@@ -1716,10 +1720,13 @@ renderCC Debug.CCPayload{..} = do
 
 
 getIncSize :: (a -> Maybe String) -> (a -> Int) -> IOTree a name -> [Int] -> IO (Int, Bool)
-getIncSize getName getSize' tree selectedPath = do
-  let subtree = getSubTree tree selectedPath
-  (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName)
-  return (getClosureIncSize getName getSize' Set.empty expSubTree, capped)
+getIncSize getName getSize' tree@(IOTree _ roots _ _ _) selectedPath = do
+  if null roots 
+    then return (0, False)
+    else do 
+      let subtree = getSubTree tree selectedPath
+      (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName)
+      return (getClosureIncSize getName getSize' Set.empty expSubTree, capped)
 
 
 getClosureIncSize :: (a -> Maybe String) -> (a -> Int) -> Set.Set String -> IOTreeNode a name -> Int
@@ -1765,6 +1772,25 @@ getClosureVizTree _ nodes edges _ = (nodes, edges)
 
 renderBytesHtml :: Real a => a -> String
 renderBytesHtml n = getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes))
+
+renderUIFilterHtml :: UIFilter -> Int -> Html ()
+renderUIFilterHtml (UIAddressFilter inv x) = renderUIFLine inv "Closure address" show x 
+renderUIFilterHtml (UIInfoAddressFilter inv x) = renderUIFLine inv "Info table address" show x
+renderUIFilterHtml (UIConstructorFilter inv x) = renderUIFLine inv "Constructor name" id x
+renderUIFilterHtml (UIInfoNameFilter inv x) = renderUIFLine inv "Constructor name (exact)" id x
+renderUIFilterHtml (UISizeFilter inv x) = renderUIFLine inv "Size (lower bound)" (show . getSize) x
+renderUIFilterHtml (UIClosureTypeFilter inv x) = renderUIFLine inv "Closure type" show x
+renderUIFLine :: Bool -> String -> (a -> String) -> a -> Int -> Html ()
+renderUIFLine inv desc show' x (-1) = 
+  li_ $ toHtml $ (bool "" "!" inv) <> desc <> ": " <> show' x 
+renderUIFLine inv desc show' x i = 
+  div_ [class_ "filter-line", style_ "display: flex; align-items: center; gap: 8px;"] $ do
+    form_ [method_ "post", action_ "/deleteFilter", value_ "undefined", style_ "margin: 0;"] $ do
+      input_ [type_ "hidden", name_ "index", value_ (pack $ show i)]
+      button_ [type_ "submit", class_ "delete-button"] "x"
+    div_ [] $ toHtml $ (bool "" "!" inv) <> desc <> ": " <> show' x 
+plainUIFilters :: [UIFilter] -> Html ()
+plainUIFilters fs = mapM_ (uncurry renderUIFilterHtml) (zip fs (repeat (-1)))
 
 closureFormat :: ClosureDetails -> String
 closureFormat (ClosureDetails clo _ inf) = closureShowAddress clo ++ "\n" ++ takeWhile (/=' ') (unquote (show (_pretty inf)))
@@ -1823,6 +1849,7 @@ profileLevelParam getParam = readParam "profileLevel" getParam parseProfileLevel
 filterTypeParam getParam = readParam "filterType" getParam id ""
 patternParam getParam = readParam "pattern" getParam id ""
 invertParam getParam = readParam "invert" getParam (read :: String -> Bool) "False"
+indexParam getParam = readParam "index" getParam (read :: String -> Int) "(-1)"
 
 buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
@@ -2352,6 +2379,20 @@ app appStateRef = do
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/modifyFilters"
+  Scotty.post "/deleteFilter" $ do
+    state <- liftIO $ readIORef appStateRef
+    index <- indexParam Scotty.formParam
+    case state ^. majorState of 
+      Connected socket debuggee mode -> 
+        case mode of
+          PausedMode os -> do
+            let newFilters = let (as, bs) = Prelude.splitAt index (_filters os) in as ++ (tail bs)
+                newOs = setFilters newFilters os
+                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect "/modifyFilters"
+
      
   where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
