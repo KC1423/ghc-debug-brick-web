@@ -31,7 +31,6 @@ import Data.GraphViz.Types.Generalised (DotGraph)
 import Web.Scotty.Internal.Types
 import Data.Functor.Identity (Identity)
 import Data.String (IsString)
-import Debug.Trace
 
 import Brick
 import Brick.BChan
@@ -40,7 +39,7 @@ import Brick.Widgets.Border
 import Brick.Widgets.Center (centerLayer, hCenter)
 import Brick.Widgets.List
 import Control.Applicative
-import Control.Monad (forever, forM)
+import Control.Monad (forM)
 import Control.Monad.IO.Class
 import Control.Monad.Catch (bracket)
 import Control.Concurrent
@@ -49,7 +48,6 @@ import Data.Ord (comparing)
 import qualified Data.Ord as Ord
 import qualified Data.Sequence as Seq
 import qualified Graphics.Vty as Vty
-import qualified Graphics.Vty.CrossPlatform as Vty
 import Graphics.Vty.Input.Events (Key(..))
 import Lens.Micro.Platform
 import System.Directory
@@ -141,6 +139,7 @@ myAppDraw (AppState majorState' _) =
                 SavedAndGCRoots {} -> "Root Closures"
                 Retainer {} -> "Retainers"
                 Searched {} -> "Search Results"
+                SearchedHtml {} -> "Search Results"
               )
               (pauseModeTree (\_ -> renderIOTree) os)
           , footer (osSize os) (_resultSize os) fmode
@@ -764,6 +763,8 @@ handleMainWindowEvent dbg brickEvent = do
           Searched r t -> do
             newTree <- handleIOTreeEvent event t
             put (os & treeMode .~ Searched r newTree)
+          SearchedHtml{} -> do
+            error "Error: somehow using the web stuff"
 
         _ -> return ()
 
@@ -792,13 +793,13 @@ stringsAction dbg = do
   -- TODO: Does not honour search limit at all
   asyncAction "Counting strings" outside_os (stringsAnalysis Nothing dbg) $ \res -> do
     os <- get
-    let cmp (k, v) = length k * (S.size v)
+    --let cmp (k, v) = length k * (S.size v)
     let sorted_res = maybe id take (_resultSize os) $ Prelude.reverse [(k, S.toList v ) | (k, v) <- (List.sortBy (comparing (S.size . snd)) (M.toList res))]
 
         top_closure = [CountLine k (length k) (length v) | (k, v) <- sorted_res]
 
         g_children d (CountLine b _ _) = do
-          let Just cs = M.lookup b res
+          let cs = maybe Set.empty id (M.lookup b res)
           cs' <- run dbg $ forM (S.toList cs) $ \c -> do
             c' <- GD.dereferenceClosure c
             return $ ListFullClosure $ Closure c c'
@@ -874,7 +875,7 @@ arrWordsAction dbg = do
         !words_histogram = histogram 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
 
         g_children d (CountLine b _ _) = do
-          let Just cs = M.lookup b res
+          let cs = maybe Set.empty id (M.lookup b res)
           cs' <- run dbg $ forM (S.toList cs) $ \c -> do
             c' <- GD.dereferenceClosure c
             return $ ListFullClosure $ Closure c c'
@@ -1049,8 +1050,8 @@ dispatchFooterInput dbg (FProfile lvl) form = do
         )
 dispatchFooterInput _ FDumpArrWords form = do
    os <- get
-   let act node = asyncAction_ "dumping ARR_WORDS payload" os $
-        case node of
+   let act node' = asyncAction_ "dumping ARR_WORDS payload" os $
+        case node' of
           Just ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} ->
               BS.writeFile (T.unpack $ formState form) $ arrWordsBS (take (fromIntegral bytes) arrWords)
           _ -> pure ()
@@ -1058,6 +1059,7 @@ dispatchFooterInput _ FDumpArrWords form = do
       Retainer _ iotree -> act (ioTreeSelection iotree)
       SavedAndGCRoots _ -> act (ioTreeSelection (view treeSavedAndGCRoots os))
       Searched {} -> put (os & footerMessage "Dump for search mode not implemented yet")
+      SearchedHtml {} -> put (os & footerMessage "How are you even seeing this")
 -- Incomplete
 dispatchFooterInput _ FSetResultSize form = do
    outside_os <- get
@@ -1838,14 +1840,9 @@ toggleSelected selectedPath togglePath'
   where sLen = length selectedPath
         tLen = length togglePath'
 
--- Helper function for reading parameters
--- name is a String, the name of the parameter
--- getParam is Scotty.[path|query|form]Param
--- f 'parses' the raw parameter
--- def is the default value
 readParam :: t1 -> (t1 -> Scotty.ActionM t2) -> (t2 -> b) -> t2 -> ActionT IO b
 readParam name getParam f def = do
-  p <- getParam name `Scotty.rescue` (\ (_ :: E.SomeException) -> return def)
+  p <- getParam name `Scotty.catch` (\ (_ :: E.SomeException) -> return def)
   return $ f p
 
 type ParamGet t r = (t -> Scotty.ActionM String) -> ActionT IO r
@@ -2278,7 +2275,7 @@ app appStateRef = do
                 !words_histogram = Just $ histogramHtml 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
                 
                 g_children d (CountLine b _ _) = do
-                  let Just cs = M.lookup b arrMap
+                  let cs = maybe Set.empty id (M.lookup b arrMap)
                   cs' <- run debuggee' $ forM (S.toList cs) $ \c -> do
                     c' <- GD.dereferenceClosure c
                     return $ ListFullClosure $ Closure c c'
@@ -2313,7 +2310,7 @@ app appStateRef = do
                 top_closure = [CountLine k (length k) (length v) | (k, v) <- sorted_res]
                
                 g_children d (CountLine b _ _) = do
-                  let Just cs = M.lookup b stringMap
+                  let cs = maybe Set.empty id (M.lookup b stringMap)
                   cs' <- run debuggee' $ forM (S.toList cs) $ \c -> do
                     c' <- GD.dereferenceClosure c
                     return $ ListFullClosure $ Closure c c'

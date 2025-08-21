@@ -83,9 +83,9 @@ renderSocketTime = pack . formatTime defaultTimeLocale "%c" . _socketCreated
 isSocketAlive :: FilePath -> IO Bool
 isSocketAlive path = do
   result <- try $ do
-    socket <- NS.socket NS.AF_UNIX NS.Stream NS.defaultProtocol
-    NS.connect socket (NS.SockAddrUnix path)
-    NS.close socket
+    socket' <- NS.socket NS.AF_UNIX NS.Stream NS.defaultProtocol
+    NS.connect socket' (NS.SockAddrUnix path)
+    NS.close socket'
   pure $ case result of
     Left (_ :: SomeException) -> False
     Right _ -> True
@@ -157,10 +157,12 @@ data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
               | forall a . Searched (a -> Widget Name) (IOTree a Name)
               | forall a . SearchedHtml (Utils a) (IOTree a Name) String
 
+
 treeLength :: TreeMode -> Maybe Int
 treeLength (SavedAndGCRoots {}) = Nothing
 treeLength (Retainer _ tree) = Just $ Prelude.length $ getIOTreeRoots tree
 treeLength (Searched _ tree) = Just $ Prelude.length $ getIOTreeRoots tree
+treeLength (SearchedHtml _ tree _) = Just $ Prelude.length $ getIOTreeRoots tree
 
 data FooterMode = FooterInfo
                 | FooterMessage Text
@@ -361,6 +363,7 @@ pauseModeTree k (OperationalState _ _ mode _kb _footer _from roots _ _ _ _) = ca
   SavedAndGCRoots render -> k render roots
   Retainer render r -> k render r
   Searched render r -> k render r
+  _ -> error "Error: web stuff here"
 
 makeLenses ''AppState
 makeLenses ''MajorState

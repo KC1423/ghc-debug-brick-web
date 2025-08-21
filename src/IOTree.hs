@@ -40,7 +40,6 @@ module IOTree
   ) where
 
 import Lucid
-import Debug.Trace
 import qualified Data.Set as Set
 
 import           Brick
@@ -472,8 +471,9 @@ renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath renderRow =
 getSubTree :: IOTree node name -> [Int] -> Maybe (IOTreeNode node name)
 getSubTree (IOTree _ roots _ _ _) path = findNodeByPath roots path
   where findNodeByPath :: [IOTreeNode node name] -> [Int] -> Maybe (IOTreeNode node name)
+        findNodeByPath _ [] = Nothing
         findNodeByPath [] _ = Nothing
-        findNodeByPath (n@(IOTreeNode node' csE) : rest) path@(i:is) = 
+        findNodeByPath (n@(IOTreeNode _ csE) : rest) (i:is) = 
           if i == 0 then if null is then Just n else case csE of
                                                        Left _ -> Nothing
                                                        Right cs -> findNodeByPath cs is
@@ -487,6 +487,7 @@ toggleTreeByPath (IOTree a roots b c d) path = do
 
 toggleNodeByPath :: [IOTreeNode node name] -> [Int] -> IO [IOTreeNode node name]
 toggleNodeByPath [] _ = return []
+toggleNodeByPath _ [] = return []
 toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
   if i == 0 then if null is then case csE of
                                    Left getChildren -> do
@@ -509,8 +510,8 @@ expandNodeSafe :: IOTreeNode node name -> (node -> String) -> IO (IOTreeNode nod
 expandNodeSafe = expandNodeWithCap 100
 
 expandNodeWithCap :: Int -> IOTreeNode node name -> (node -> String) -> IO (IOTreeNode node name, Bool)
-expandNodeWithCap cap n format = do
-  (node, nodes) <- go Set.empty n
+expandNodeWithCap cap n' format = do
+  (node, nodes) <- go Set.empty n'
   return (node, Set.size nodes == cap)
   where 
     go seen n@(IOTreeNode node csE)
