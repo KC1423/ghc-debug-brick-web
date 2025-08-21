@@ -29,6 +29,8 @@ import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg))
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph)
 import Web.Scotty.Internal.Types
+import Data.Functor.Identity (Identity)
+import Data.String (IsString)
 import Debug.Trace
 
 import Brick
@@ -1327,7 +1329,7 @@ renderBadSocketPage =
       button_ "Select another socket"
 
 renderConnectedPage :: [Int] -> Maybe (Int, Bool) -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
-renderConnectedPage selectedPath mInc socket debuggee mode = renderText $ case mode of
+renderConnectedPage selectedPath mInc socket _ mode = renderText $ case mode of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
@@ -1594,12 +1596,11 @@ renderFilterSearchPage selectedPath mInc mode = renderText $ case mode of
               h3_ "Filters: "
               button_ "Modify filters"
             ul_ [style_ "margin-top: 0.25rem;"] $ plainUIFilters (_filters os)
-
         renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
         autoScrollScript
 
 renderModifyFilterPage :: ConnectedMode -> TL.Text
-renderModifyFilterPage mode = renderText $ case mode of
+renderModifyFilterPage mode' = renderText $ case mode' of
   PausedMode os -> do
     h1_ "Modify filters"
      
@@ -1627,7 +1628,9 @@ renderModifyFilterPage mode = renderText $ case mode of
         if inEraMode os then genFilterButtons "Enter era" "Era" else mempty
         if inSomeProfMode os then genFilterButtons "Enter cost centre id" "CCID" else mempty
 
+genFilterButtons :: String -> String -> Html ()
 genFilterButtons = genFilterButtons' True
+genFilterButtonsNoExclude :: String -> String -> Html ()
 genFilterButtonsNoExclude = genFilterButtons' False
 genFilterButtons' :: Bool -> String -> String -> Html ()
 genFilterButtons' exclude flavourText filterType = do
@@ -1658,10 +1661,10 @@ detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
        a_ [href_ ("/" <> pack name <> "?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderHtml obj
 
 renderClosureHtml :: ClosureDetails -> Html ()
-renderClosureHtml (ClosureDetails closure _excSize info) = div_ [class_ "closure-row"] $ do
-  li_ $ toHtml $ _labelInParent info <> " | " <> pack (closureShowAddress closure) <> " | " <> _pretty info 
-renderClosureHtml (InfoDetails info) = div_ [class_ "closure-row"] $ do
-  li_ $ toHtml $ _labelInParent info <> " | " <> _pretty info 
+renderClosureHtml (ClosureDetails closure' _excSize info') = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ _labelInParent info' <> " | " <> pack (closureShowAddress closure') <> " | " <> _pretty info' 
+renderClosureHtml (InfoDetails info') = div_ [class_ "closure-row"] $ do
+  li_ $ toHtml $ _labelInParent info' <> " | " <> _pretty info' 
 renderClosureHtml (LabelNode t) = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ t
 renderClosureHtml (CCSDetails clabel _cptr ccspayload) = div_ [class_ "closure-row"] $ do
@@ -1700,16 +1703,16 @@ renderSourceInfoSummary (SourceInformation name cty ty label' modu loc) = do
 
 
 renderInfoSummary :: InfoInfo -> Html ()
-renderInfoSummary info = do 
-  maybe mempty renderSourceInfoSummary (_sourceLocation info)
-  case _profHeaderInfo info of
+renderInfoSummary info' = do 
+  maybe mempty renderSourceInfoSummary (_sourceLocation info')
+  case _profHeaderInfo info' of
     Just x ->
-      let label = case x of 
-                    Debug.RetainerHeader{} -> "Retainer info: "
-                    Debug.LDVWord{} -> "LDV info: "
-                    Debug.EraWord{} -> "Era: "
-                    Debug.OtherHeader{} -> "Other: "
-      in summaryEntry label (renderProfHeader x)
+      let label' = case x of 
+                     Debug.RetainerHeader{} -> "Retainer info: "
+                     Debug.LDVWord{} -> "LDV info: "
+                     Debug.EraWord{} -> "Era: "
+                     Debug.OtherHeader{} -> "Other: "
+      in summaryEntry label' (renderProfHeader x)
     Nothing -> mempty
   where renderProfHeader pinfo@(Debug.RetainerHeader {}) = show pinfo
         renderProfHeader (Debug.LDVWord {state, creationTime, lastUseTime}) = 
@@ -1732,18 +1735,18 @@ renderCC Debug.CCPayload{..} = do
 
 
 getIncSize :: (a -> Maybe String) -> (a -> Int) -> IOTree a name -> [Int] -> IO (Maybe (Int, Bool))
-getIncSize getName getSize' tree selectedPath =
+getIncSize getName' getSize' tree selectedPath =
   case getSubTree tree selectedPath of
     Nothing -> return Nothing
     Just subtree -> do
-      (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName)
-      return $ Just (getClosureIncSize getName getSize' Set.empty expSubTree, capped)
+      (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName')
+      return $ Just (getClosureIncSize getName' getSize' Set.empty expSubTree, capped)
   
 getClosureIncSize :: (a -> Maybe String) -> (a -> Int) -> Set.Set String -> IOTreeNode a name -> Int
-getClosureIncSize getName getSize' seen' node = fst (go seen' node)
+getClosureIncSize getName' getSize' seen' node' = fst (go seen' node')
   where
     go seen (IOTreeNode n csE) =
-      case getName n of
+      case getName' n of
         Nothing -> case csE of 
                      Left _ -> (0, seen)
                      Right cs -> listApply go 0 seen cs
@@ -1766,11 +1769,11 @@ getClosureVizTree format' nodes edges (IOTreeNode n csE) =
      then (nodes, [])
      else case csE of
             Left _ -> (Set.insert ptr nodes, [])
-            Right csE -> 
+            Right cs -> 
               let nodes'' = Set.insert ptr nodes
-                  (nodesFinal, childEdges) = listApply (getClosureVizTree format') (nodes'', edges) csE
+                  (nodesFinal, childEdges) = listApply (getClosureVizTree format') (nodes'', edges) cs
                   children = [ format' n'
-                             | IOTreeNode n' _ <- csE ]
+                             | IOTreeNode n' _ <- cs ]
                   newEdges = map (\ch -> (ptr, ch)) children
               in (nodesFinal, childEdges ++ newEdges)
   where
@@ -1778,7 +1781,6 @@ getClosureVizTree format' nodes edges (IOTreeNode n csE) =
       foldl (\(nsAcc, esAcc) x ->
                let (ns', es') = f nsAcc [] x
                in (ns', esAcc ++ es')) (ns, es) xs
-getClosureVizTree _ nodes edges _ = (nodes, edges)
 
 renderBytesHtml :: Real a => a -> String
 renderBytesHtml n = getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes))
@@ -1811,8 +1813,8 @@ closureFormat (LabelNode l) = unquote $ show l
 closureFormat x = error $ "viztree format, missing implementation: " ++ show x
 
 getNodeName :: IOTreeNode ClosureDetails name -> String
-getNodeName (IOTreeNode (ClosureDetails c excSize info) _) = closureShowAddress c
-getNodeName (IOTreeNode (InfoDetails info) _) = show $ _labelInParent info
+getNodeName (IOTreeNode (ClosureDetails c _ _) _) = closureShowAddress c
+getNodeName (IOTreeNode (InfoDetails info') _) = show $ _labelInParent info'
 
 parsePath :: String -> [Int]
 parsePath [] = []
@@ -1821,6 +1823,7 @@ parsePath s = map read $ splitOn "." s
 parseProfileLevel :: String -> ProfileLevel
 parseProfileLevel "1" = OneLevel
 parseProfileLevel "2" = TwoLevel  
+parseProfileLevel _ = error "Error: profile level not supported"
 
 unquote :: String -> String
 unquote ('\"':xs) | last xs == '\"' = init xs
@@ -1839,40 +1842,50 @@ togglePath :: Eq a => [a] -> [[a]] -> [[a]]
 togglePath x xs = if x `elem` xs then filter (/=x) xs else x:xs
 
 toggleSelected :: Eq a => [a] -> [a] -> [a]
-toggleSelected selectedPath togglePath
+toggleSelected selectedPath togglePath'
   | sLen <= tLen = selectedPath
-  | take tLen selectedPath == togglePath = togglePath  
+  | take tLen selectedPath == togglePath' = togglePath'
   | otherwise = selectedPath
   where sLen = length selectedPath
-        tLen = length togglePath
+        tLen = length togglePath'
 
 -- Helper function for reading parameters
 -- name is a String, the name of the parameter
 -- getParam is Scotty.[path|query|form]Param
 -- f 'parses' the raw parameter
 -- def is the default value
+readParam :: t1 -> (t1 -> Scotty.ActionM t2) -> (t2 -> b) -> t2 -> ActionT IO b
 readParam name getParam f def = do
   p <- getParam name `Scotty.rescue` (\ (_ :: E.SomeException) -> return def)
   return $ f p
 
+type ParamGet t r = (t -> Scotty.ActionM String) -> ActionT IO r
+selectedParam :: Data.String.IsString t => ParamGet t [Int]
 selectedParam getParam = readParam "selected" getParam parsePath "0"
+togglePathParam :: Data.String.IsString t => ParamGet t [Int]
 togglePathParam getParam = readParam "toggle" getParam parsePath ""
+profileLevelParam :: Data.String.IsString t => ParamGet t ProfileLevel
 profileLevelParam getParam = readParam "profileLevel" getParam parseProfileLevel "1" 
+filterTypeParam :: Data.String.IsString t => ParamGet t String
 filterTypeParam getParam = readParam "filterType" getParam id ""
+patternParam :: Data.String.IsString t => ParamGet t String
 patternParam getParam = readParam "pattern" getParam id ""
-invertParam getParam = readParam "invert" getParam (read :: String -> Bool) "False"
-indexParam getParam = readParam "index" getParam (read :: String -> Int) "(-1)"
+invertParam :: Data.String.IsString t => ParamGet t Bool
+invertParam getParam = readParam "invert" getParam read "False"
+indexParam :: Data.String.IsString t => ParamGet t Int
+indexParam getParam = readParam "index" getParam read "(-1)"
 
 buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
   -- possible style for source node, except this logic doesn't always select the source node
+  -- nids@((sn, sid):rest)
   --node sid [toLabel (pack sn :: Text), Data.GraphViz.style filled, fillColor Yellow, color Red]
   mapM_ (\(n, nid) -> node nid [toLabel (pack n :: Text)]) nids
   mapM_ (\(a, b) -> case (lookup a nids, lookup b nids) of
                       (Just x, Just y) -> edge x y []
                       z -> error ("Error in building closure graph: " ++ 
                                   "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
-  where nids@((sn, sid):rest) = zipWith (\n i -> (n,i)) nodes [1..]
+  where nids = zipWith (\n i -> (n,i)) nodes [1..]
 
 histogramHtml :: Int -> [GD.Size] -> Html ()
 histogramHtml boxes m = do
@@ -1890,6 +1903,7 @@ histogramHtml boxes m = do
       where
         (now, later) = span ((<= k + step) . snd) xs
 
+autoScrollScript :: HtmlT Data.Functor.Identity.Identity ()
 autoScrollScript = script_ $ mconcat
                      [ "window.addEventListener('beforeunload', () => {"
                      , "sessionStorage.setItem('scrollY', window.scrollY);"
@@ -1913,7 +1927,7 @@ genericGet appStateRef index renderPage = do
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
       Connected _ _ mode' ->
-        case mode' of 
+        case mode' of
           PausedMode os -> do 
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
@@ -2404,8 +2418,8 @@ app appStateRef = do
       Setup{} -> Scotty.redirect "/" 
   Scotty.post "/addFilter" $ do
     state <- liftIO $ readIORef appStateRef
-    pattern :: String <- patternParam Scotty.formParam
-    filterType :: String <- filterTypeParam Scotty.formParam
+    pattern <- patternParam Scotty.formParam
+    filterType <- filterTypeParam Scotty.formParam
     invert <- invertParam Scotty.formParam
     case state ^. majorState of 
       Connected socket debuggee' mode' -> 
