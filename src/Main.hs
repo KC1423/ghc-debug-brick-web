@@ -20,6 +20,7 @@ module Main where
 import qualified Web.Scotty as Scotty
 import Data.IORef
 import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
@@ -1503,8 +1504,8 @@ renderIncSize incSize capped selectedPath = do
       button_ [type_ "submit", class_ "inc-button"] $ "See inclusive size"
   else mempty-}
 
-renderImgPage :: String -> String -> [Int] -> Bool -> TL.Text
-renderImgPage returnTo name selectedPath capped =
+renderImgPage :: String -> String -> [Int] -> Bool -> TL.Text -> TL.Text
+renderImgPage returnTo name selectedPath capped svgContent =
   renderText $ do
     h1_ $ toHtml $ "Visualisation of " ++ name
     if capped then h2_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
@@ -1516,8 +1517,21 @@ renderImgPage returnTo name selectedPath capped =
                 , style_ "display: inline-block; margin-top: 1em;"
                 ] "Download SVG"
       img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
-
-
+      -- this code renders the svg with JS so it is interactive
+      {-div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; height: 80vh; overflow: hidden;"] $ 
+        toHtmlRaw svgContent
+      script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
+      script_ $ mconcat
+        [ "const element = document.querySelector('#svg-container svg');"
+        , "panzoom(element, {"
+        , "  bounds: true,"
+        , "  boundsPadding: 0.1,"
+        , "  zoomDoubleClickSpeed: 1,"
+        , "  maxZoom: 10,"
+        , "  minZoom: 0.1"
+        , "});"
+        ]-}
+      
 reconnectLink = do
   div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
     button_ [ type_ "submit"
@@ -1949,7 +1963,8 @@ handleImg tree nodeName pageName format' selectedPath = do
         let graph = buildClosureGraph vizNodes vizEdges
         _ <- runGraphviz graph Svg svgPath
         return ()
-      Scotty.html $ renderImgPage pageName name selectedPath capped
+      svgContent <- liftIO $ BS.readFile svgPath
+      Scotty.html $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
 
   
 
