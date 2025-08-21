@@ -1348,7 +1348,6 @@ renderConnectedPage selectedPath mInc socket _ mode = renderText $ case mode of
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
         detailedSummary renderClosureSummary tree selectedPath mInc
         
-
       -- Right column: Analysis buttons
       div_ [ style_ "flex: 1;" ] $ do
         div_ [ style_ "margin: 0; display: flex; flex-direction: column; gap: 0.25rem;" ] $ do
@@ -1576,57 +1575,55 @@ renderThunkAnalysisPage selectedPath mInc mode = renderText $ case mode of
         reconnectLink
         genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
 
-renderFilterSearchPage :: [Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text
-renderFilterSearchPage selectedPath mInc mode = renderText $ case mode of
-  PausedMode os -> do
-    case _treeMode os of
-      Retainer _ tree -> do
-        h1_ "Results for search with filters"
-        reconnectLink
-        div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
-          -- Left column: Line summary
-          div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
-            h3_ "Selection: "
-            ul_ $ detailedSummary renderClosureSummary tree selectedPath mInc
-        
-          -- Right column: List of filters
-          div_ [ style_ "flex: 1;" ] $ do
-            form_ [ method_ "post", action_ "/modifyFilters"
-                  , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-              h3_ "Filters: "
-              button_ "Modify filters"
-            ul_ [style_ "margin-top: 0.25rem;"] $ plainUIFilters (_filters os)
-        renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
-        autoScrollScript
+renderFilterSearchPage :: (Show name, Ord name) 
+                       => IOTree ClosureDetails name -> [UIFilter] 
+                       -> [Int] -> Maybe (Int, Bool) -> TL.Text
+renderFilterSearchPage tree filters' selectedPath mInc = renderText $ do
+  h1_ "Results for search with filters"
+  reconnectLink
+  div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
+    -- Left column: Line summary
+    div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
+      h3_ "Selection: "
+      ul_ $ detailedSummary renderClosureSummary tree selectedPath mInc
+  
+    -- Right column: List of filters
+    div_ [ style_ "flex: 1;" ] $ do
+      form_ [ method_ "post", action_ "/modifyFilters"
+            , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+        h3_ "Filters: "
+        button_ "Modify filters"
+      ul_ [style_ "margin-top: 0.25rem;"] $ plainUIFilters filters'
+  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
+  autoScrollScript
 
-renderModifyFilterPage :: ConnectedMode -> TL.Text
-renderModifyFilterPage mode' = renderText $ case mode' of
-  PausedMode os -> do
-    h1_ "Modify filters"
-     
-    div_ $ form_ [method_ "post", action_ "/searchWithFilters", style_ "display:inline"] $
-      button_ [ type_ "submit"
-              , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
-              ] "Return to search page"
+renderModifyFilterPage :: [UIFilter] -> Version -> TL.Text
+renderModifyFilterPage filters' dbgVersion = renderText $ do  
+  h1_ "Modify filters"
+   
+  div_ $ form_ [method_ "post", action_ "/searchWithFilters", style_ "display:inline"] $
+    button_ [ type_ "submit"
+            , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
+            ] "Return to search page"
 
 
-    div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
-      -- Left column: List of filters
-      div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
-        h3_ "Current filters: "
-        ul_ $ mapM_ (uncurry renderUIFilterHtml) (zip (_filters os) [0..])
-      
-      -- Right column: Buttons to modify filters
-      div_ [ style_ "flex: 1;" ] $ do
-        genFilterButtons "Enter closure address" "Address" 
-        genFilterButtons "Enter info table address" "InfoAddress" 
-        genFilterButtons "Enter constructor name" "ConstrName"
-        genFilterButtons "Enter closure name" "ClosureName"
-        genFilterButtons "Enter closure size (B)" "ClosureSize"
-        genFilterButtons "Enter closure type" "ClosureType"
-        genFilterButtonsNoExclude "Enter ARR_WORDS size (B)" "ARR_WORDSSize"
-        if inEraMode os then genFilterButtons "Enter era" "Era" else mempty
-        if inSomeProfMode os then genFilterButtons "Enter cost centre id" "CCID" else mempty
+  div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
+    -- Left column: List of filters
+    div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
+      h3_ "Current filters: "
+      ul_ $ mapM_ (uncurry renderUIFilterHtml) (zip filters' [0..])
+    
+    -- Right column: Buttons to modify filters
+    div_ [ style_ "flex: 1;" ] $ do
+      genFilterButtons "Enter closure address" "Address" 
+      genFilterButtons "Enter info table address" "InfoAddress" 
+      genFilterButtons "Enter constructor name" "ConstrName"
+      genFilterButtons "Enter closure name" "ClosureName"
+      genFilterButtons "Enter closure size (B)" "ClosureSize"
+      genFilterButtons "Enter closure type" "ClosureType"
+      genFilterButtonsNoExclude "Enter ARR_WORDS size (B)" "ARR_WORDSSize"
+      if inEraMode dbgVersion then genFilterButtons "Enter era" "Era" else mempty
+      if inSomeProfMode dbgVersion then genFilterButtons "Enter cost centre id" "CCID" else mempty
 
 genFilterButtons :: String -> String -> Html ()
 genFilterButtons = genFilterButtons' True
@@ -1812,10 +1809,6 @@ closureFormat (InfoDetails inf) = unquote (show (_labelInParent inf))
 closureFormat (LabelNode l) = unquote $ show l
 closureFormat x = error $ "viztree format, missing implementation: " ++ show x
 
-getNodeName :: IOTreeNode ClosureDetails name -> String
-getNodeName (IOTreeNode (ClosureDetails c _ _) _) = closureShowAddress c
-getNodeName (IOTreeNode (InfoDetails info') _) = show $ _labelInParent info'
-
 parsePath :: String -> [Int]
 parsePath [] = []
 parsePath s = map read $ splitOn "." s
@@ -1988,13 +1981,14 @@ handleImg tree nodeName pageName format' selectedPath = do
       let name = nodeName subtree
       let (nodes', vizEdges) = getClosureVizTree format' Set.empty [] expSubtree
       let vizNodes = Set.toList nodes'
+      let graph = buildClosureGraph vizNodes vizEdges
       liftIO $ do 
         createDirectoryIfMissing True "tmp"
-        let graph = buildClosureGraph vizNodes vizEdges
         _ <- runGraphviz graph Svg svgPath
         return ()
       svgContent <- liftIO $ BS.readFile svgPath
       Scotty.html $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
+    _ -> error "Error: failed to find selected node in tree"
 
 closureGetName :: ClosureDetails -> Maybe String
 closureGetName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
@@ -2179,9 +2173,9 @@ app appStateRef = do
             case _treeMode os of
               SavedAndGCRoots _ -> do
                 let tree = _treeSavedAndGCRoots os
-                handleImg tree getNodeName "connect" closureFormat selectedPath
+                handleImg tree (\(IOTreeNode n' _) -> closureFormat n') "connect" closureFormat selectedPath
               Retainer _ tree -> do
-                handleImg tree getNodeName "searchWithFilters" closureFormat selectedPath
+                handleImg tree (\(IOTreeNode n' _) -> closureFormat n') "searchWithFilters" closureFormat selectedPath
               SearchedHtml Utils{..} tree pageName -> do
                 let nameFn = maybe "" id . _getName 
                 handleImg tree (\(IOTreeNode n' _) -> nameFn n') pageName nameFn selectedPath
@@ -2381,7 +2375,7 @@ app appStateRef = do
             case _treeMode os of
               Retainer _ tree -> do
                 mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-                Scotty.html $ renderFilterSearchPage selectedPath mInc mode'
+                Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
               _ -> error "Error: incorrect tree type" 
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
@@ -2401,20 +2395,24 @@ app appStateRef = do
                 (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderFilterSearchPage selectedPath mInc (_mode newMajorState)
+            Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
   Scotty.get "/modifyFilters" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected _ _ mode' ->
-        Scotty.html $ renderModifyFilterPage mode'
+        case mode' of
+          PausedMode os -> Scotty.html $ renderModifyFilterPage (_filters os) (_version os)
+          _ -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
   Scotty.post "/modifyFilters" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected _ _ mode' ->
-        Scotty.html $ renderModifyFilterPage mode'
+        case mode' of
+          PausedMode os -> Scotty.html $ renderModifyFilterPage (_filters os) (_version os)
+          _ -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
   Scotty.post "/addFilter" $ do
     state <- liftIO $ readIORef appStateRef
