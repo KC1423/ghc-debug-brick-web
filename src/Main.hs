@@ -25,9 +25,10 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz
-import Data.GraphViz.Types.Monadic
+import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg))
+import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph)
+import Web.Scotty.Internal.Types
 import Debug.Trace
 
 import Brick
@@ -1911,14 +1912,20 @@ genericGet appStateRef index renderPage = do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of 
+      Connected _ _ mode' ->
+        case mode' of 
           PausedMode os -> do 
             case _treeMode os of 
+               SavedAndGCRoots{} -> Scotty.redirect "/connect"
+               Retainer{} -> Scotty.redirect "/searchWithFilters"
                SearchedHtml Utils{..} tree _ -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
-                 Scotty.html $ renderPage selectedPath mInc mode
+                 Scotty.html $ renderPage selectedPath mInc mode'
+               _ -> error "Error: 'Searched' tree mode deprecated"
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/"
 
+dumpArrWord :: ClosureDetails -> ActionT IO ()
 dumpArrWord cs = do
   case cs of
     ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} -> do
@@ -1926,24 +1933,32 @@ dumpArrWord cs = do
       Scotty.setHeader "Content-Type" "application/octet-stream"
       Scotty.setHeader "Content-Disposition" "attachment; filename=\"closure.bin\""
       Scotty.raw payload
+    _ -> mempty
+arrDumpProf :: ProfileLine -> ActionT IO () 
 arrDumpProf (ClosureLine cs) = dumpArrWord cs 
 arrDumpProf _ = mempty
+arrDumpCount :: ArrWordsLine a -> ActionT IO () 
 arrDumpCount (FieldLine cs) = dumpArrWord cs 
 arrDumpCount _ = mempty
+arrDumpThunk :: ThunkLine -> ActionT IO () 
 arrDumpThunk _ = mempty
 
-handleConnect appStateRef state formValue options isValid connect = do
+handleConnect :: Foldable t => IORef AppState -> AppState -> TL.LazyText -> t SocketInfo
+                            -> (SocketInfo -> IO Bool)
+                            -> ((Text -> IO ()) -> FilePath -> IO Debuggee)
+                            -> Web.Scotty.Internal.Types.ActionT IO ()
+handleConnect appStateRef state formValue options isValid' connect = do
   let match = F.find (\s -> TL.fromStrict (socketName s) == formValue) options
   case match of
     Just socketLike -> do
-      valid <- liftIO $ isValid socketLike
+      valid <- liftIO $ isValid' socketLike
       if valid
         then do
-          debuggee <- liftIO $ connect (writeBChan (_appChan state) . ProgressMessage)
+          debuggee' <- liftIO $ connect (writeBChan (_appChan state) . ProgressMessage)
                                  (_socketLocation socketLike)
           let newState = state & majorState .~ Connected
                       { _debuggeeSocket = socketLike
-                      , _debuggee = debuggee
+                      , _debuggee = debuggee'
                       , _mode = RunningMode
                       }
           liftIO $ writeIORef appStateRef newState
@@ -1959,7 +1974,7 @@ handleImg tree nodeName pageName format' selectedPath = do
       let name = nodeName subtree
       let (nodes', vizEdges) = getClosureVizTree format' Set.empty [] expSubtree
       let vizNodes = Set.toList nodes'
-      liftIO $ do
+      liftIO $ do 
         createDirectoryIfMissing True "tmp"
         let graph = buildClosureGraph vizNodes vizEdges
         _ <- runGraphviz graph Svg svgPath
@@ -1967,15 +1982,21 @@ handleImg tree nodeName pageName format' selectedPath = do
       svgContent <- liftIO $ BS.readFile svgPath
       Scotty.html $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
 
+closureGetName :: ClosureDetails -> Maybe String
 closureGetName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
-closureGetSize x = case x of ClosureDetails _ excSize _ -> getSize excSize
+closureGetSize :: ClosureDetails -> Int
+closureGetSize x = case x of ClosureDetails _ excSize' _ -> getSize excSize'; _ -> 0
+countGetName :: ArrWordsLine a -> Maybe String
 countGetName x = case x of FieldLine c -> Just (closureFormat c); _ -> Nothing
-countGetSize x = case x of FieldLine (ClosureDetails _ excSize _) -> getSize excSize; _ -> 0
+countGetSize :: ArrWordsLine a -> Int
+countGetSize x = case x of FieldLine (ClosureDetails _ excSize' _) -> getSize excSize'; _ -> 0
+countTM :: Show a => Maybe (Html ()) -> IOTree (ArrWordsLine a) Name -> String -> TreeMode
 countTM histo = SearchedHtml (Utils renderCountHtml (renderCountSummary histo) arrDumpCount countGetName countGetSize) 
 
-setTreeMode os treeMode socket debuggee state = (newAppState, newMajorState)
-  where newOs = os { _treeMode = treeMode }
-        newMajorState = Connected socket debuggee (PausedMode newOs)
+setTreeMode :: OperationalState -> TreeMode -> SocketInfo -> Debuggee -> AppState -> (AppState, MajorState)
+setTreeMode os treeMode' socket debuggee' state = (newAppState, newMajorState)
+  where newOs = os { _treeMode = treeMode' }
+        newMajorState = Connected socket debuggee' (PausedMode newOs)
         newAppState = state & majorState .~ newMajorState
 
 
@@ -2000,12 +2021,12 @@ app appStateRef = do
   Scotty.get "/" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Setup st knownDebuggees knownSnapshots -> do
-        knownDebuggees' <- liftIO $ updateListFrom socketDirectory knownDebuggees
-        knownSnapshots' <- liftIO $ updateListFrom snapshotDirectory knownSnapshots
-        let socketList = F.toList $ knownDebuggees' ^. listElementsL
-        let snapshotList = F.toList $ knownSnapshots' ^. listElementsL
-        liftIO $ writeIORef appStateRef $ state & majorState .~ Setup st knownDebuggees' knownSnapshots'
+      Setup st knownDebuggees' knownSnapshots' -> do
+        newKnownDebuggees <- liftIO $ updateListFrom socketDirectory knownDebuggees'
+        newKnownSnapshots <- liftIO $ updateListFrom snapshotDirectory knownSnapshots'
+        let socketList = F.toList $ newKnownDebuggees ^. listElementsL
+        let snapshotList = F.toList $ newKnownSnapshots ^. listElementsL
+        liftIO $ writeIORef appStateRef $ state & majorState .~ Setup st newKnownDebuggees newKnownSnapshots
         case st of 
           Socket -> Scotty.html $ renderSocketSelectionPage st socketList
           Snapshot -> Scotty.html $ renderSocketSelectionPage st snapshotList
@@ -2016,36 +2037,36 @@ app appStateRef = do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode -> 
-        case mode of 
+      Connected socket debuggee' mode' -> 
+        case mode' of 
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-            Scotty.html $ renderConnectedPage selectedPath mInc socket debuggee mode
-          _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee mode
+            Scotty.html $ renderConnectedPage selectedPath mInc socket debuggee' mode'
+          _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee' mode'
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Setup st knownDebuggees knownSnapshots -> do
+      Setup st knownDebuggees' knownSnapshots' -> do
         socketParam <- Scotty.formParam "socket"
         case st of
           Snapshot -> do
-            let snapshots = F.toList (knownSnapshots ^. listElementsL)
+            let snapshots = F.toList (knownSnapshots' ^. listElementsL)
             handleConnect appStateRef state socketParam snapshots (\ _ -> pure True) snapshotConnect 
           Socket -> do
-            let sockets = F.toList (knownDebuggees ^. listElementsL)
+            let sockets = F.toList (knownDebuggees' ^. listElementsL)
             handleConnect appStateRef state socketParam sockets
                           (\s -> isSocketAlive (_socketLocation s)) debuggeeConnect
-      Connected socket debuggee mode -> do
+      Connected socket debuggee' mode' -> do
         selectedPath <- selectedParam Scotty.queryParam        
-        case mode of
+        case mode' of
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-            Scotty.html $ renderConnectedPage selectedPath mInc socket debuggee mode
-          _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee mode
+            Scotty.html $ renderConnectedPage selectedPath mInc socket debuggee' mode'
+          _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee' mode'
   {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
@@ -2057,10 +2078,10 @@ app appStateRef = do
   Scotty.post "/pause" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected socket debuggee RunningMode -> do
-        liftIO $ pause debuggee
-        ver <- liftIO $ GD.version debuggee
-        (rootsTree, initRoots) <- liftIO $ mkSavedAndGCRootsIOTree debuggee
+      Connected _ debuggee' RunningMode -> do
+        liftIO $ pause debuggee'
+        ver <- liftIO $ GD.version debuggee'
+        (rootsTree, initRoots) <- liftIO $ mkSavedAndGCRootsIOTree debuggee'
         let pausedState = PausedMode $
                             OperationalState Nothing
                               Nothing
@@ -2081,8 +2102,8 @@ app appStateRef = do
   Scotty.post "/resume" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected socket debuggee (PausedMode _) -> do
-        liftIO $ resume debuggee
+      Connected _ debuggee' (PausedMode _) -> do
+        liftIO $ resume debuggee'
         let newAppState = state & majorState . mode .~ RunningMode
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/connect"
@@ -2091,7 +2112,7 @@ app appStateRef = do
   Scotty.post "/exit" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected socket debuggee (PausedMode os) -> do
+      Connected _ debuggee' (PausedMode os) -> do
         case view running_task os of
           Just tid -> do
             liftIO $ killThread tid
@@ -2100,7 +2121,7 @@ app appStateRef = do
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/connect" 
           Nothing -> do
-            liftIO $ resume debuggee
+            liftIO $ resume debuggee'
             let newAppState = initialAppState (_appChan state)
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/"
@@ -2113,7 +2134,7 @@ app appStateRef = do
     let selectedStr = encodePath newSelected
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected socket debuggee (PausedMode os) -> do
+      Connected socket debuggee' (PausedMode os) -> do
         case _treeMode os of
           SavedAndGCRoots _ -> do 
             let tree = _treeSavedAndGCRoots os
@@ -2123,22 +2144,23 @@ app appStateRef = do
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
           Retainer f tree -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let (newAppState, _) = setTreeMode os (Retainer f newTree) socket debuggee state
+            let (newAppState, _) = setTreeMode os (Retainer f newTree) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
           SearchedHtml f tree name -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let (newAppState, _) = setTreeMode os (SearchedHtml f newTree name) socket debuggee state
+            let (newAppState, _) = setTreeMode os (SearchedHtml f newTree name) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
+          _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- Creates and displays the graph for the selected object -}
   Scotty.post "/img" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.formParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
+      Connected _ _ mode' ->
+        case mode' of
           PausedMode os -> do
             case _treeMode os of
               SavedAndGCRoots _ -> do
@@ -2149,83 +2171,96 @@ app appStateRef = do
               SearchedHtml Utils{..} tree pageName -> do
                 let nameFn = maybe "" id . _getName 
                 handleImg tree (\(IOTreeNode n' _) -> nameFn n') pageName nameFn selectedPath
+              _ -> error "Error: 'Searched' tree mode deprecated"
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/"
   {- View profile (level 1 and 2) -}
   genericGet appStateRef "/profile" renderProfilePage
   Scotty.post "/profile" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
+      Connected socket debuggee' mode' ->
+        case mode' of
           PausedMode os -> do
             level <- profileLevelParam Scotty.formParam
-            profMap <- liftIO $ profile debuggee level "profile_dump" 
+            profMap <- liftIO $ profile debuggee' level "profile_dump" 
             let sortedProfiles = Prelude.reverse $
                   [ ProfileLine k kargs v
                   | ((k, kargs), v) <- List.sortBy (comparing (cssize . snd)) (M.toList profMap)
                   ]
                 totalStats = foldMap snd (M.toList profMap)
             
-                gChildren _ (ClosureLine c) = map ClosureLine <$> getChildren debuggee c
+                gChildren _ (ClosureLine c) = map ClosureLine <$> getChildren debuggee' c
                 gChildren _ (ProfileLine _ _ stats) = do
                   let samples = getSamples (sample stats)
                   closures <- forM samples $ \ptr -> do
-                    deref <- run debuggee $ GD.dereferenceClosure ptr
+                    deref <- run debuggee' $ GD.dereferenceClosure ptr
                     return $ ListFullClosure $ Closure ptr deref
                   filled <- forM (zip [0 :: Int ..] closures) $ \(i, c) -> do
-                    filledC <- fillListItem debuggee c
+                    filledC <- fillListItem debuggee' c
                     return (show i, filledC)
-                  mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee (pack lbl) filledItem) filled
-            let tree = mkIOTree debuggee sortedProfiles gChildren renderProfileLine id
-            let getName x = case x of ClosureLine c -> Just (closureFormat c); _ -> Nothing
+                  mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee' (pack lbl) filledItem) filled
+            let tree = mkIOTree debuggee' sortedProfiles gChildren renderProfileLine id
+            let getName' x = case x of ClosureLine c -> Just (closureFormat c); _ -> Nothing
             let getSize' x = case x of
-                               ClosureLine (ClosureDetails _ excSize _) -> getSize excSize
+                               ClosureLine (ClosureDetails _ excSize' _) -> getSize excSize'
                                _ -> 0
-            mInc <- liftIO $ getIncSize getName getSize' tree selectedPath
+            mInc <- liftIO $ getIncSize getName' getSize' tree selectedPath
             let newTM = SearchedHtml 
-                        (Utils renderProfileHtml (renderProfileSummary totalStats) arrDumpProf getName getSize')
+                        (Utils renderProfileHtml (renderProfileSummary totalStats) arrDumpProf getName' getSize')
                         tree "profile"
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderProfilePage selectedPath mInc (_mode newMajorState)
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/"
   {- Returns to /connect, sets the treeMode -}
   Scotty.post "/reconnect" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
+      Connected socket debuggee' mode' ->
+        case mode' of
           PausedMode os -> do
-            let (newAppState, _) = setTreeMode os (SavedAndGCRoots undefined) socket debuggee state
+            let (newAppState, _) = setTreeMode os (SavedAndGCRoots undefined) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/connect"
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/"
   {- Downloads the arr_words payload -}
   Scotty.get "/dumpArrWords" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
+      Connected _ _ mode' ->
+        case mode' of
           PausedMode os -> do
             case _treeMode os of
               SavedAndGCRoots _ -> do
                 case getSubTree (_treeSavedAndGCRoots os) selectedPath of
-                  Just (IOTreeNode node _) -> dumpArrWord node
+                  Just (IOTreeNode node' _) -> dumpArrWord node'
+                  Nothing -> error "Error: selected node doesn't exist"
               Retainer _ tree -> do
                 case getSubTree tree selectedPath of
-                  Just (IOTreeNode node _) -> dumpArrWord node
+                  Just (IOTreeNode node' _) -> dumpArrWord node'
+                  Nothing -> error "Error: selected node doesn't exist"
               SearchedHtml Utils{..} tree _  -> do
                 case getSubTree tree selectedPath of
-                  Just (IOTreeNode node _) -> _dumpArrWords node
+                  Just (IOTreeNode node' _) -> _dumpArrWords node'
+                  Nothing -> error "Error: selected node doesn't exist"
+              _ -> error "Error: 'Searched' tree mode deprecated"
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/"
   {- See arr_words count -}
   genericGet appStateRef "/arrWordsCount" (renderCountPage "ARR_WORDS")
   Scotty.post "/arrWordsCount" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
+      Connected socket debuggee' mode' ->
+        case mode' of
           PausedMode os -> do
-            arrMap <- liftIO $ arrWordsAnalysis Nothing debuggee
+            arrMap <- liftIO $ arrWordsAnalysis Nothing debuggee'
             let all_res = Prelude.reverse $ 
                   [ (k, S.toList v ) 
                   | (k, v) <- (List.sortBy (comparing 
@@ -2239,30 +2274,32 @@ app appStateRef = do
                 
                 g_children d (CountLine b _ _) = do
                   let Just cs = M.lookup b arrMap
-                  cs' <- run debuggee $ forM (S.toList cs) $ \c -> do
+                  cs' <- run debuggee' $ forM (S.toList cs) $ \c -> do
                     c' <- GD.dereferenceClosure c
                     return $ ListFullClosure $ Closure c c'
                   children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
                   mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
-            let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
+            let tree = mkIOTree debuggee' top_closure g_children renderArrWordsLines id
             mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
 
             let newTM = countTM words_histogram tree "arrWordsCount"
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderCountPage "ARR_WORDS" selectedPath mInc (_mode newMajorState)
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/"
   {- See strings count -}
   genericGet appStateRef "/stringsCount" (renderCountPage "Strings")
   Scotty.post "/stringsCount" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
+      Connected socket debuggee' mode' ->
+        case mode' of
           PausedMode os -> do
-            stringMap <- liftIO $ stringsAnalysis Nothing debuggee
+            stringMap <- liftIO $ stringsAnalysis Nothing debuggee'
             let sorted_res = maybe id take (_resultSize os) $ 
                              Prelude.reverse [(k, S.toList v ) 
                                              | (k, v) <- (List.sortBy (comparing (S.size . snd)) 
@@ -2272,97 +2309,107 @@ app appStateRef = do
                
                 g_children d (CountLine b _ _) = do
                   let Just cs = M.lookup b stringMap
-                  cs' <- run debuggee $ forM (S.toList cs) $ \c -> do
+                  cs' <- run debuggee' $ forM (S.toList cs) $ \c -> do
                     c' <- GD.dereferenceClosure c
                     return $ ListFullClosure $ Closure c c'
                   children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
                   mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
-            let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
+            let tree = mkIOTree debuggee' top_closure g_children renderArrWordsLines id
             mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
             let newTM = countTM Nothing tree "stringsCount"
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderCountPage "Strings" selectedPath mInc (_mode newMajorState)
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/" 
   {- Thunk analysis -}
   genericGet appStateRef "/thunkAnalysis" renderThunkAnalysisPage
   Scotty.post "/thunkAnalysis" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
+      Connected socket debuggee' mode' ->
+        case mode' of
           PausedMode os -> do
-            thunkMap <- liftIO $ thunkAnalysis debuggee
+            thunkMap <- liftIO $ thunkAnalysis debuggee'
             let top_closure = Prelude.reverse [ ThunkLine k v | (k, v) <- (List.sortBy (comparing (getCount . snd)) (M.toList thunkMap))]
 
                 g_children _ (ThunkLine {}) = pure []
-            let tree = mkIOTree debuggee top_closure g_children undefined id
+            let tree = mkIOTree debuggee' top_closure g_children undefined id
             let newTM = SearchedHtml 
                         (Utils renderThunkAnalysisHtml renderThunkAnalysisSummary arrDumpThunk (\_->Nothing) (\_->0)) 
                         tree "thunkAnalysis"
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderThunkAnalysisPage selectedPath Nothing (_mode newMajorState)
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/" 
   {- Take snapshot -}
   Scotty.post "/takeSnapshot" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.formParam
     filename <- Scotty.formParam "filename"
     case state ^. majorState of
-      Connected socket debuggee mode -> do
-        liftIO $ snapshot debuggee filename
+      Connected _ debuggee' _ -> do
+        liftIO $ snapshot debuggee' filename
         Scotty.redirect ("/connect?selected=" <> TL.fromStrict (encodePath selectedPath))
+      Setup{} -> Scotty.redirect "/" 
   {- Search with filters -}
   Scotty.get "/searchWithFilters" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode -> do
-        case mode of
+      Connected _ _ mode' -> do
+        case mode' of
           PausedMode os -> do
             case _treeMode os of
               Retainer _ tree -> do
                 mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-                Scotty.html $ renderFilterSearchPage selectedPath mInc mode
+                Scotty.html $ renderFilterSearchPage selectedPath mInc mode'
+              _ -> error "Error: incorrect tree type" 
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/" 
   Scotty.post "/searchWithFilters" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        case mode of
+      Connected socket debuggee' mode' ->
+        case mode' of
           PausedMode os -> do
             let mClosFilter = uiFiltersToFilter (_filters os)
-            cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee
+            cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
             let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
-            res <- liftIO $ mapM (mapM (completeClosureDetails debuggee)) cps'
-            let tree = mkRetainerTree debuggee res
+            res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
+            let tree = mkRetainerTree debuggee' res
             let newTM = Retainer renderClosureDetails tree
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderFilterSearchPage selectedPath mInc (_mode newMajorState)
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/" 
   Scotty.get "/modifyFilters" $ do
     state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        Scotty.html $ renderModifyFilterPage mode
+      Connected _ _ mode' ->
+        Scotty.html $ renderModifyFilterPage mode'
+      Setup{} -> Scotty.redirect "/" 
   Scotty.post "/modifyFilters" $ do
     state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee mode ->
-        Scotty.html $ renderModifyFilterPage mode
+      Connected _ _ mode' ->
+        Scotty.html $ renderModifyFilterPage mode'
+      Setup{} -> Scotty.redirect "/" 
   Scotty.post "/addFilter" $ do
     state <- liftIO $ readIORef appStateRef
     pattern :: String <- patternParam Scotty.formParam
     filterType :: String <- filterTypeParam Scotty.formParam
     invert <- invertParam Scotty.formParam
     case state ^. majorState of 
-      Connected socket debuggee mode -> 
-        case mode of
+      Connected socket debuggee' mode' -> 
+        case mode' of
           PausedMode os -> do
             let newFilter = case filterType of 
                               "Address" -> maybe [] (pure . UIAddressFilter invert) (readClosurePtr pattern)
@@ -2377,39 +2424,46 @@ app appStateRef = do
                                                           (readMaybe pattern) 
                               "Era" -> maybe [] (pure . UIEraFilter invert) (parseEraRange $ T.pack pattern)
                               "CCID" -> maybe [] (pure . UICcId invert) (readMaybe pattern) 
+                              _ -> []
             let newOs = addFilters newFilter os  
-                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newMajorState = Connected socket debuggee' (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/modifyFilters"
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/" 
   Scotty.post "/deleteFilter" $ do
     state <- liftIO $ readIORef appStateRef
     index <- indexParam Scotty.formParam
     case state ^. majorState of 
-      Connected socket debuggee mode -> 
-        case mode of
+      Connected socket debuggee' mode' -> 
+        case mode' of
           PausedMode os -> do
             let newFilters = let (as, bs) = Prelude.splitAt index (_filters os) in as ++ (tail bs)
                 newOs = setFilters newFilters os
-                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newMajorState = Connected socket debuggee' (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/modifyFilters"
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/" 
   Scotty.post "/setSearchLimit" $ do
     state <- liftIO $ readIORef appStateRef
     index <- indexParam Scotty.formParam
     case state ^. majorState of 
-      Connected socket debuggee mode -> 
-        case mode of
+      Connected socket debuggee' mode' -> 
+        case mode' of
           PausedMode os -> do
             let newResultSize = case index of
                                   n | n <= 0 -> Nothing
                                   n -> Just n
             let newOs = os { _resultSize = newResultSize } 
-                newMajorState = Connected socket debuggee (PausedMode newOs)
+                newMajorState = Connected socket debuggee' (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/connect"
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/" 
 
   where mkSavedAndGCRootsIOTree debuggee' = do
           raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
