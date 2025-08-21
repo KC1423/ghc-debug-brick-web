@@ -1623,6 +1623,9 @@ renderModifyFilterPage filters' dbgVersion = renderText $ do
       genFilterButtonsNoExclude "Enter ARR_WORDS size (B)" "ARR_WORDSSize"
       if inEraMode dbgVersion then genFilterButtons "Enter era" "Era" else mempty
       if inSomeProfMode dbgVersion then genFilterButtons "Enter cost centre id" "CCID" else mempty
+      form_ [ method_ "post", action_ "/clearFilters"
+            , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+        button_ [type_ "submit"] "Clear all filters"    
 
 genFilterButtons :: String -> String -> Html ()
 genFilterButtons = genFilterButtons' True
@@ -2445,7 +2448,10 @@ app appStateRef = do
       Connected socket debuggee' mode' -> 
         case mode' of
           PausedMode os -> do
-            let newFilters = let (as, bs) = Prelude.splitAt index (_filters os) in as ++ (tail bs)
+            let newFilters = case index of
+                               n | n < 0 -> _filters os 
+                               _ -> let (as, bs) = Prelude.splitAt index (_filters os) 
+                                    in as ++ (tail bs)
                 newOs = setFilters newFilters os
                 newMajorState = Connected socket debuggee' (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
@@ -2453,6 +2459,19 @@ app appStateRef = do
             Scotty.redirect "/modifyFilters"
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
+  Scotty.post "/clearFilters" $ do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of 
+      Connected socket debuggee' mode' -> 
+        case mode' of
+          PausedMode os -> do
+            let newOs = setFilters [] os
+                newMajorState = Connected socket debuggee' (PausedMode newOs)
+                newAppState = state & majorState .~ newMajorState
+            liftIO $ writeIORef appStateRef newAppState
+            Scotty.redirect "/modifyFilters"
+          RunningMode -> Scotty.redirect "/connect"
+      Setup{} -> Scotty.redirect "/"
   Scotty.post "/setSearchLimit" $ do
     state <- liftIO $ readIORef appStateRef
     index <- indexParam Scotty.formParam
