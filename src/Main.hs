@@ -1692,6 +1692,7 @@ renderSourceInfoSummary :: SourceInformation -> Html ()
 renderSourceInfoSummary (SourceInformation name cty ty label' modu loc) = do 
   summaryEntry "Name" name
   summaryEntry "Closure type" (show cty)
+  summaryEntry "Type" ty
   summaryEntry "Label" label'
   summaryEntry "Module" modu
   summaryEntry "Location" loc
@@ -1966,7 +1967,17 @@ handleImg tree nodeName pageName format' selectedPath = do
       svgContent <- liftIO $ BS.readFile svgPath
       Scotty.html $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
 
-  
+closureGetName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
+closureGetSize x = case x of ClosureDetails _ excSize _ -> getSize excSize
+countGetName x = case x of FieldLine c -> Just (closureFormat c); _ -> Nothing
+countGetSize x = case x of FieldLine (ClosureDetails _ excSize _) -> getSize excSize; _ -> 0
+countTM histo = SearchedHtml (Utils renderCountHtml (renderCountSummary histo) arrDumpCount countGetName countGetSize) 
+
+setTreeMode os treeMode socket debuggee state = (newAppState, newMajorState)
+  where newOs = os { _treeMode = treeMode }
+        newMajorState = Connected socket debuggee (PausedMode newOs)
+        newAppState = state & majorState .~ newMajorState
+
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -2009,9 +2020,7 @@ app appStateRef = do
         case mode of 
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
-            let getName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
-            let getSize' x = case x of ClosureDetails _ excSize _ -> getSize excSize
-            mInc <- liftIO $ getIncSize getName getSize' tree selectedPath
+            mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
             Scotty.html $ renderConnectedPage selectedPath mInc socket debuggee mode
           _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee mode
       _ -> Scotty.redirect "/"
@@ -2034,9 +2043,7 @@ app appStateRef = do
         case mode of
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
-            let getName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
-            let getSize' x = case x of ClosureDetails _ excSize _ -> getSize excSize
-            mInc <- liftIO $ getIncSize getName getSize' tree selectedPath
+            mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
             Scotty.html $ renderConnectedPage selectedPath mInc socket debuggee mode
           _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee mode
   {- Toggles between socket and snapshot mode when selecting -}
@@ -2116,16 +2123,12 @@ app appStateRef = do
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
           Retainer f tree -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newOs = os { _treeMode = Retainer f newTree }
-                newMajorState = Connected socket debuggee (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let (newAppState, _) = setTreeMode os (Retainer f newTree) socket debuggee state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
           SearchedHtml f tree name -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newOs = os { _treeMode = SearchedHtml f newTree name }
-                newMajorState = Connected socket debuggee (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let (newAppState, _) = setTreeMode os (SearchedHtml f newTree name) socket debuggee state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
       _ -> Scotty.redirect "/"
@@ -2179,9 +2182,10 @@ app appStateRef = do
                                ClosureLine (ClosureDetails _ excSize _) -> getSize excSize
                                _ -> 0
             mInc <- liftIO $ getIncSize getName getSize' tree selectedPath
-            let newOs = os { _treeMode = SearchedHtml (Utils renderProfileHtml (renderProfileSummary totalStats) arrDumpProf getName getSize') tree "profile" }
-                newMajorState = Connected socket debuggee (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let newTM = SearchedHtml 
+                        (Utils renderProfileHtml (renderProfileSummary totalStats) arrDumpProf getName getSize')
+                        tree "profile"
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderProfilePage selectedPath mInc (_mode newMajorState)
   {- Returns to /connect, sets the treeMode -}
@@ -2191,9 +2195,7 @@ app appStateRef = do
       Connected socket debuggee mode ->
         case mode of
           PausedMode os -> do
-            let newOs = os { _treeMode = SavedAndGCRoots undefined }
-                newMajorState = Connected socket debuggee (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let (newAppState, _) = setTreeMode os (SavedAndGCRoots undefined) socket debuggee state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/connect"
   {- Downloads the arr_words payload -}
@@ -2245,16 +2247,10 @@ app appStateRef = do
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
             let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
-            let getName x = case x of FieldLine c -> Just (closureFormat c); _ -> Nothing
-            let getSize' x = case x of
-                               FieldLine (ClosureDetails _ excSize _) -> getSize excSize
-                               _ -> 0
-   
-            mInc <- liftIO $ getIncSize getName getSize' tree selectedPath
+            mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
 
-            let newOs = os { _treeMode = SearchedHtml (Utils renderCountHtml (renderCountSummary words_histogram) arrDumpCount getName getSize') tree "arrWordsCount" }
-                newMajorState = Connected socket debuggee (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let newTM = countTM words_histogram tree "arrWordsCount"
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderCountPage "ARR_WORDS" selectedPath mInc (_mode newMajorState)
   {- See strings count -}
@@ -2284,16 +2280,9 @@ app appStateRef = do
                 g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
             let tree = mkIOTree debuggee top_closure g_children renderArrWordsLines id
-            let getName x = case x of FieldLine c -> Just (closureFormat c); _ -> Nothing
-            let getSize' x = case x of
-                               FieldLine (ClosureDetails _ excSize _) -> getSize excSize
-                               _ -> 0
-   
-            mInc <- liftIO $ getIncSize getName getSize' tree selectedPath
-
-            let newOs = os { _treeMode = SearchedHtml (Utils renderCountHtml (renderCountSummary Nothing) arrDumpCount getName getSize') tree "stringsCount" }
-                newMajorState = Connected socket debuggee (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
+            let newTM = countTM Nothing tree "stringsCount"
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderCountPage "Strings" selectedPath mInc (_mode newMajorState)
   {- Thunk analysis -}
@@ -2310,9 +2299,10 @@ app appStateRef = do
 
                 g_children _ (ThunkLine {}) = pure []
             let tree = mkIOTree debuggee top_closure g_children undefined id
-            let newOs = os { _treeMode = SearchedHtml (Utils renderThunkAnalysisHtml renderThunkAnalysisSummary arrDumpThunk (const Nothing) (const 0)) tree "thunkAnalysis" }
-                newMajorState = Connected socket debuggee (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let newTM = SearchedHtml 
+                        (Utils renderThunkAnalysisHtml renderThunkAnalysisSummary arrDumpThunk (\_->Nothing) (\_->0)) 
+                        tree "thunkAnalysis"
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderThunkAnalysisPage selectedPath Nothing (_mode newMajorState)
   {- Take snapshot -}
@@ -2334,9 +2324,7 @@ app appStateRef = do
           PausedMode os -> do
             case _treeMode os of
               Retainer _ tree -> do
-                let getName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
-                let getSize' x = case x of ClosureDetails _ excSize _ -> getSize excSize
-                mInc <- liftIO $ getIncSize getName getSize' tree selectedPath
+                mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
                 Scotty.html $ renderFilterSearchPage selectedPath mInc mode
   Scotty.post "/searchWithFilters" $ do
     state <- liftIO $ readIORef appStateRef
@@ -2350,12 +2338,9 @@ app appStateRef = do
             let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
             res <- liftIO $ mapM (mapM (completeClosureDetails debuggee)) cps'
             let tree = mkRetainerTree debuggee res
-            let newOs = os { _treeMode = Retainer renderClosureDetails tree }
-                newMajorState = Connected socket debuggee (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
-            let getName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
-            let getSize' x = case x of ClosureDetails _ excSize _ -> getSize excSize
-            mInc <- liftIO $ getIncSize getName getSize' tree selectedPath
+            let newTM = Retainer renderClosureDetails tree
+                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee state
+            mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderFilterSearchPage selectedPath mInc (_mode newMajorState)
   Scotty.get "/modifyFilters" $ do
@@ -2436,32 +2421,7 @@ app appStateRef = do
 
 
 main :: IO ()
-main = newMain
-
-oldMain :: IO ()
-oldMain = do
-  eventChan <- newBChan 10
-  _ <- forkIO $ forever $ do
-    writeBChan eventChan PollTick
-    -- 2s
-    threadDelay 2_000_000
-  let buildVty = Vty.mkVty Vty.defaultConfig
-  initialVty <- buildVty
-  
-  let app' :: App AppState Event Name
-      app' = App
-        { appDraw = myAppDraw
-        , appChooseCursor = showFirstCursor
-        , appHandleEvent = myAppHandleEvent
-        , appStartEvent = myAppStartEvent
-        , appAttrMap = myAppAttrMap
-        }
-  _finalState <- customMain initialVty buildVty
-                    (Just eventChan) app' (initialAppState eventChan)
-  return ()
-
-newMain :: IO ()
-newMain = do
+main = do
   eventChan <- newBChan 10
   let initial = initialAppState eventChan
   appStateRef <- newIORef initial
