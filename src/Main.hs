@@ -1547,36 +1547,29 @@ genericTreeBody tree selectedPath renderRow renderSummary' name mInc = do
   renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
   autoScrollScript
 
-renderProfilePage :: [Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text
-renderProfilePage selectedPath mInc mode = renderText $ case mode of
-  PausedMode os -> do
-    case _treeMode os of
-      SearchedHtml Utils{..} tree name -> do
-        h1_ "Profile"
-        reconnectLink
-        div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
-        genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
+renderProfilePage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
+                  -> [Int] -> Maybe (Int, Bool) -> TL.Text
+renderProfilePage Utils{..} tree name selectedPath mInc = renderText $ do
+  h1_ "Profile"
+  reconnectLink
+  div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
+  genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
 
-renderCountPage :: String -> [Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text
-renderCountPage title selectedPath mInc mode = renderText $ case mode of
-  PausedMode os -> do
-    case _treeMode os of
-      SearchedHtml Utils{..} tree name -> do
-        h1_ $ toHtml $ title ++ " Count"
-        reconnectLink
-        genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
+renderCountPage :: (Show name, Ord name) => String -> Utils a -> IOTree a name -> String
+                -> [Int] -> Maybe (Int, Bool) -> TL.Text
+renderCountPage title Utils{..} tree name selectedPath mInc = renderText $ do
+  h1_ $ toHtml $ title ++ " Count"
+  reconnectLink
+  genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
         
-renderThunkAnalysisPage :: [Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text
-renderThunkAnalysisPage selectedPath mInc mode = renderText $ case mode of
-  PausedMode os -> do
-    case _treeMode os of
-      SearchedHtml Utils{..} tree name -> do
-        h1_ "Thunk analysis"
-        reconnectLink
-        genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
+renderThunkAnalysisPage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
+                        -> [Int] -> Maybe (Int, Bool) -> TL.Text
+renderThunkAnalysisPage Utils{..} tree name selectedPath mInc = renderText $ do
+  h1_ "Thunk analysis"
+  reconnectLink
+  genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
 
-renderFilterSearchPage :: (Show name, Ord name) 
-                       => IOTree ClosureDetails name -> [UIFilter] 
+renderFilterSearchPage :: (Show name, Ord name) => IOTree ClosureDetails name -> [UIFilter] 
                        -> [Int] -> Maybe (Int, Bool) -> TL.Text
 renderFilterSearchPage tree filters' selectedPath mInc = renderText $ do
   h1_ "Results for search with filters"
@@ -1912,7 +1905,8 @@ svgPath = "tmp/graph.svg"
 
 genericGet :: IORef AppState
            -> Scotty.RoutePattern
-           -> ([Int] -> Maybe (Int, Bool) -> ConnectedMode -> TL.Text)
+           -> (forall a . Utils a -> IOTree a Name -> String -> [Int] 
+                       -> Maybe (Int, Bool) -> TL.Text)
            -> Scotty.ScottyM ()
 genericGet appStateRef index renderPage = do
   Scotty.get index $ do
@@ -1925,9 +1919,9 @@ genericGet appStateRef index renderPage = do
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
                Retainer{} -> Scotty.redirect "/searchWithFilters"
-               SearchedHtml Utils{..} tree _ -> do
+               SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
-                 Scotty.html $ renderPage selectedPath mInc mode'
+                 Scotty.html $ renderPage u tree name selectedPath mInc
                _ -> error "Error: 'Searched' tree mode deprecated"
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
@@ -1998,11 +1992,13 @@ countGetName :: ArrWordsLine a -> Maybe String
 countGetName x = case x of FieldLine c -> Just (closureFormat c); _ -> Nothing
 countGetSize :: ArrWordsLine a -> Int
 countGetSize x = case x of FieldLine (ClosureDetails _ excSize' _) -> getSize excSize'; _ -> 0
-countTM :: Show a => Maybe (Html ()) -> IOTree (ArrWordsLine a) Name -> String -> TreeMode
-countTM histo = SearchedHtml (Utils renderCountHtml (renderCountSummary histo) arrDumpCount countGetName countGetSize) 
+countTM :: Show a => Maybe (Html ()) -> IOTree (ArrWordsLine a) Name -> String
+        -> (TreeMode, Utils (ArrWordsLine a))
+countTM histo tree name = (SearchedHtml utils tree name, utils)
+  where utils = Utils renderCountHtml (renderCountSummary histo) arrDumpCount countGetName countGetSize
 
-setTreeMode :: OperationalState -> TreeMode -> SocketInfo -> Debuggee -> AppState -> (AppState, MajorState)
-setTreeMode os treeMode' socket debuggee' state = (newAppState, newMajorState)
+setTreeMode :: OperationalState -> TreeMode -> SocketInfo -> Debuggee -> AppState -> AppState
+setTreeMode os treeMode' socket debuggee' state = newAppState
   where newOs = os { _treeMode = treeMode' }
         newMajorState = Connected socket debuggee' (PausedMode newOs)
         newAppState = state & majorState .~ newMajorState
@@ -2152,12 +2148,12 @@ app appStateRef = do
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
           Retainer f tree -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let (newAppState, _) = setTreeMode os (Retainer f newTree) socket debuggee' state
+            let newAppState = setTreeMode os (Retainer f newTree) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
           SearchedHtml f tree name -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let (newAppState, _) = setTreeMode os (SearchedHtml f newTree name) socket debuggee' state
+            let newAppState = setTreeMode os (SearchedHtml f newTree name) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
           _ -> error "Error: 'Searched' tree mode deprecated"
@@ -2215,12 +2211,11 @@ app appStateRef = do
                                ClosureLine (ClosureDetails _ excSize' _) -> getSize excSize'
                                _ -> 0
             mInc <- liftIO $ getIncSize getName' getSize' tree selectedPath
-            let newTM = SearchedHtml 
-                        (Utils renderProfileHtml (renderProfileSummary totalStats) arrDumpProf getName' getSize')
-                        tree "profile"
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
+            let utils = Utils renderProfileHtml (renderProfileSummary totalStats) arrDumpProf getName' getSize'
+                newTM = SearchedHtml utils tree "profile"
+                newAppState = setTreeMode os newTM socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderProfilePage selectedPath mInc (_mode newMajorState)
+            Scotty.html $ renderProfilePage utils tree "profile" selectedPath mInc
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
   {- Returns to /connect, sets the treeMode -}
@@ -2230,7 +2225,7 @@ app appStateRef = do
       Connected socket debuggee' mode' ->
         case mode' of
           PausedMode os -> do
-            let (newAppState, _) = setTreeMode os (SavedAndGCRoots undefined) socket debuggee' state
+            let newAppState = setTreeMode os (SavedAndGCRoots undefined) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/connect"
           RunningMode -> Scotty.redirect "/connect"
@@ -2292,10 +2287,10 @@ app appStateRef = do
             let tree = mkIOTree debuggee' top_closure g_children renderArrWordsLines id
             mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
 
-            let newTM = countTM words_histogram tree "arrWordsCount"
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
+            let (newTM, utils) = countTM words_histogram tree "arrWordsCount"
+                newAppState = setTreeMode os newTM socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderCountPage "ARR_WORDS" selectedPath mInc (_mode newMajorState)
+            Scotty.html $ renderCountPage "ARR_WORDS" utils tree "arrWordsCount" selectedPath mInc
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
   {- See strings count -}
@@ -2326,10 +2321,11 @@ app appStateRef = do
 
             let tree = mkIOTree debuggee' top_closure g_children renderArrWordsLines id
             mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
-            let newTM = countTM Nothing tree "stringsCount"
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
+            let (newTM, utils) = countTM Nothing tree "stringsCount"
+                newAppState = setTreeMode os newTM socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderCountPage "Strings" selectedPath mInc (_mode newMajorState)
+
+            Scotty.html $ renderCountPage "Strings" utils tree "stringsCount" selectedPath mInc
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
   {- Thunk analysis -}
@@ -2346,12 +2342,11 @@ app appStateRef = do
 
                 g_children _ (ThunkLine {}) = pure []
             let tree = mkIOTree debuggee' top_closure g_children undefined id
-            let newTM = SearchedHtml 
-                        (Utils renderThunkAnalysisHtml renderThunkAnalysisSummary arrDumpThunk (\_->Nothing) (\_->0)) 
-                        tree "thunkAnalysis"
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
+            let utils = Utils renderThunkAnalysisHtml renderThunkAnalysisSummary arrDumpThunk (\_->Nothing) (\_->0) 
+            let newTM = SearchedHtml utils tree "thunkAnalysis"
+                newAppState = setTreeMode os newTM socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.html $ renderThunkAnalysisPage selectedPath Nothing (_mode newMajorState)
+            Scotty.html $ renderThunkAnalysisPage utils tree "thunkAnalysis" selectedPath Nothing
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
   {- Take snapshot -}
@@ -2392,7 +2387,7 @@ app appStateRef = do
             res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
             let tree = mkRetainerTree debuggee' res
             let newTM = Retainer renderClosureDetails tree
-                (newAppState, newMajorState) = setTreeMode os newTM socket debuggee' state
+                newAppState = setTreeMode os newTM socket debuggee' state
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
