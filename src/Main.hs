@@ -1329,7 +1329,7 @@ renderBadSocketPage =
       button_ "Select another socket"
 
 renderConnectedPage :: [Int] -> Maybe (Int, Bool) -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
-renderConnectedPage selectedPath mInc socket _ mode = renderText $ case mode of
+renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
@@ -1388,19 +1388,20 @@ renderConnectedPage selectedPath mInc socket _ mode = renderText $ case mode of
       SavedAndGCRoots {} -> pack "Root Closures"
       Retainer {} -> pack "Retainers"
       Searched {} -> pack "Search Results"
+      SearchedHtml {} -> pack "Search Results"
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
 
 renderClosureSummary :: ClosureDetails -> [Int] -> Maybe (Int, Bool) -> Html ()
-renderClosureSummary node path mInc =
-  case node of
-    ClosureDetails c excSize info -> do 
-      renderInfoSummary info
+renderClosureSummary node' path mInc =
+  case node' of
+    ClosureDetails _ excSize' info' -> do 
+      renderInfoSummary info'
       li_ $ do
         strong_ "Exclusive size: "
-        toHtml (show (getSize excSize) <> "B")
-        case node of 
-          ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} -> do
+        toHtml (show (getSize excSize') <> "B")
+        case node' of 
+          ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{}}} -> do
             li_ $ a_ [href_ ("/dumpArrWords?selected=" <> encodePath path)] "Dump ARR_WORDS payload"
           _ -> mempty
         case mInc of
@@ -1411,7 +1412,7 @@ renderClosureSummary node path mInc =
           button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
 
     LabelNode n -> li_ $ toHtml n
-    InfoDetails info -> renderInfoSummary info
+    InfoDetails info' -> renderInfoSummary info'
     CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
       li_ $ do 
         strong_ "ID: "
@@ -1426,7 +1427,7 @@ detailedSummary f tree path mInc =
   div_ [class_ "selection-summary"] $ do
     case getSubTree tree path of
       Nothing -> mempty
-      Just (IOTreeNode node _) -> f node path mInc
+      Just (IOTreeNode node' _) -> f node' path mInc
     
 summaryEntry :: (Monad m, Term (HtmlT m ()) result, ToHtml a) => HtmlT m () -> a -> result
 summaryEntry title value = li_ $ strong_ (title <> ": ") >> toHtml value
@@ -1493,7 +1494,7 @@ renderThunkAnalysisSummary (ThunkLine msc c) _ _ = do
   summaryEntry "Count" (show $ getCount c)
 
 renderIncSize :: Int -> Bool -> [Int] -> Html ()
-renderIncSize incSize capped selectedPath = do 
+renderIncSize incSize capped _ = do 
   li_ $ do
     strong_ "Inclusive size: "
     toHtml ((if capped then ">=" else "") ++
@@ -1507,7 +1508,7 @@ renderIncSize incSize capped selectedPath = do
   else mempty-}
 
 renderImgPage :: String -> String -> [Int] -> Bool -> TL.Text -> TL.Text
-renderImgPage returnTo name selectedPath capped svgContent =
+renderImgPage returnTo name selectedPath capped _ =
   renderText $ do
     h1_ $ toHtml $ "Visualisation of " ++ name
     if capped then h2_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
@@ -1534,13 +1535,16 @@ renderImgPage returnTo name selectedPath capped svgContent =
         , "});"
         ]-}
       
+reconnectLink :: HtmlT Identity ()
 reconnectLink = do
   div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
     button_ [ type_ "submit"
             , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
             ] "Return to saved objects and GC roots"
 
-
+genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -> Html ())
+                -> (node -> [Int] -> Maybe (Int, Bool) -> Html ()) -> String -> Maybe (Int, Bool)
+                -> HtmlT Identity ()
 genericTreeBody tree selectedPath renderRow renderSummary' name mInc = do
   detailedSummary renderSummary' tree selectedPath mInc
   h3_ "Results"
@@ -1722,7 +1726,6 @@ renderCC Debug.CCPayload{..} = do
   summaryEntry "Allocation" (show ccMemAlloc)
   summaryEntry "Time ticks" (show ccTimeTicks)
   summaryEntry "Is CAF" (show ccIsCaf)
-
 
 getIncSize :: (a -> Maybe String) -> (a -> Int) -> IOTree a name -> [Int] -> IO (Maybe (Int, Bool))
 getIncSize getName' getSize' tree selectedPath =
@@ -2002,7 +2005,6 @@ setTreeMode os treeMode' socket debuggee' state = newAppState
   where newOs = os { _treeMode = treeMode' }
         newMajorState = Connected socket debuggee' (PausedMode newOs)
         newAppState = state & majorState .~ newMajorState
-
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
