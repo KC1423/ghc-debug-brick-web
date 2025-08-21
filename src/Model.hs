@@ -144,10 +144,18 @@ data ClosureDetails = ClosureDetails
   | CCDetails Text CCPayload
   | LabelNode { _label :: Text } deriving Show
 
+data Utils a = Utils {
+  _renderRow :: a -> Html (),
+  _renderSummary :: a -> [Int] -> Maybe (Int, Bool) -> Html (),
+  _dumpArrWords :: a -> Web.Scotty.Internal.Types.ActionT IO (),
+  _getName :: a -> Maybe String,
+  _getSize :: a -> Int
+}
+
 data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
               | Retainer (ClosureDetails -> Widget Name) (IOTree (ClosureDetails) Name)
               | forall a . Searched (a -> Widget Name) (IOTree a Name)
-              | forall a . SearchedHtml (a -> Html (), a -> [Int] -> Html (), a -> Web.Scotty.Internal.Types.ActionT IO ()) (IOTree a Name) String
+              | forall a . SearchedHtml (Utils a) (IOTree a Name) String
 
 treeLength :: TreeMode -> Maybe Int
 treeLength (SavedAndGCRoots {}) = Nothing
@@ -212,6 +220,11 @@ isCmdEnabled debuggeeVersion cmd = case commandRequiresProfMode cmd of
     Just GD.EraProfiling == GD.v_profiling debuggeeVersion
   ReqSomeProfiling ->
     GD.isProfiledRTS debuggeeVersion
+
+inEraMode :: OperationalState -> Bool
+inEraMode os = Just GD.EraProfiling == GD.v_profiling (_version os)
+inSomeProfMode :: OperationalState -> Bool
+inSomeProfMode os = GD.isProfiledRTS (_version os)
 
 isCmdDisabled :: GD.Version -> Command -> Bool
 isCmdDisabled v cmd = not $ isCmdEnabled v cmd

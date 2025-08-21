@@ -469,11 +469,8 @@ renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath renderRow =
                       childHtml = go thisPath children
                   in rowHtml <> childHtml
 
-getSubTree :: IOTree node name -> [Int] -> IOTreeNode node name
-getSubTree (IOTree _ roots _ _ _) path =
-  case findNodeByPath roots path of
-    Just n@(IOTreeNode node csE) -> n
-    Nothing -> error "Error: non-existent path"
+getSubTree :: IOTree node name -> [Int] -> Maybe (IOTreeNode node name)
+getSubTree (IOTree _ roots _ _ _) path = findNodeByPath roots path
   where findNodeByPath :: [IOTreeNode node name] -> [Int] -> Maybe (IOTreeNode node name)
         findNodeByPath [] _ = Nothing
         findNodeByPath (n@(IOTreeNode node' csE) : rest) path@(i:is) = 
