@@ -1840,26 +1840,26 @@ toggleSelected selectedPath togglePath'
   where sLen = length selectedPath
         tLen = length togglePath'
 
-readParam :: t1 -> (t1 -> Scotty.ActionM t2) -> (t2 -> b) -> t2 -> ActionT IO b
+readParam :: t1 -> (t1 -> Scotty.ActionM String) -> (String -> t2) -> t2 -> Scotty.ActionM t2
 readParam name getParam f def = do
-  p <- getParam name `Scotty.catch` (\ (_ :: E.SomeException) -> return def)
-  return $ f p
+  result <- (getParam name >>= return . f) `Scotty.catch` (\ (_ :: E.SomeException) -> return def)
+  return result
 
-type ParamGet t r = (t -> Scotty.ActionM String) -> ActionT IO r
+type ParamGet t r = (t -> Scotty.ActionM String) -> Scotty.ActionM r
 selectedParam :: Data.String.IsString t => ParamGet t [Int]
-selectedParam getParam = readParam "selected" getParam parsePath "0"
+selectedParam getParam = readParam "selected" getParam parsePath [0]
 togglePathParam :: Data.String.IsString t => ParamGet t [Int]
-togglePathParam getParam = readParam "toggle" getParam parsePath ""
+togglePathParam getParam = readParam "toggle" getParam parsePath []
 profileLevelParam :: Data.String.IsString t => ParamGet t ProfileLevel
-profileLevelParam getParam = readParam "profileLevel" getParam parseProfileLevel "1" 
+profileLevelParam getParam = readParam "profileLevel" getParam parseProfileLevel OneLevel 
 filterTypeParam :: Data.String.IsString t => ParamGet t String
 filterTypeParam getParam = readParam "filterType" getParam id ""
 patternParam :: Data.String.IsString t => ParamGet t String
 patternParam getParam = readParam "pattern" getParam id ""
 invertParam :: Data.String.IsString t => ParamGet t Bool
-invertParam getParam = readParam "invert" getParam read "False"
+invertParam getParam = readParam "invert" getParam read False
 indexParam :: Data.String.IsString t => ParamGet t Int
-indexParam getParam = readParam "index" getParam read "(-1)"
+indexParam getParam = readParam "index" getParam read (-1)
 
 buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
