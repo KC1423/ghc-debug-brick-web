@@ -2003,11 +2003,14 @@ countTM :: Show a => Maybe (Html ()) -> IOTree (ArrWordsLine a) Name -> String
 countTM histo tree name = (SearchedHtml utils tree name, utils)
   where utils = Utils renderCountHtml (renderCountSummary histo) arrDumpCount countGetName countGetSize
 
-setTreeMode :: OperationalState -> TreeMode -> SocketInfo -> Debuggee -> AppState -> AppState
-setTreeMode os treeMode' socket debuggee' state = newAppState
-  where newOs = os { _treeMode = treeMode' }
+updateAppState :: t -> (t -> OperationalState) -> SocketInfo -> Debuggee -> AppState -> AppState
+updateAppState os f socket debuggee' state = newAppState
+  where newOs = f os
         newMajorState = Connected socket debuggee' (PausedMode newOs)
         newAppState = state & majorState .~ newMajorState
+
+setTM :: TreeMode -> OperationalState -> OperationalState
+setTM treeMode' os = os { _treeMode = treeMode' }
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -2153,12 +2156,12 @@ app appStateRef = do
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
           Retainer f tree -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newAppState = setTreeMode os (Retainer f newTree) socket debuggee' state
+            let newAppState = updateAppState os (setTM $ Retainer f newTree) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
           SearchedHtml f tree name -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newAppState = setTreeMode os (SearchedHtml f newTree name) socket debuggee' state
+            let newAppState = updateAppState os (setTM $ SearchedHtml f newTree name) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
           _ -> error "Error: 'Searched' tree mode deprecated"
@@ -2218,7 +2221,7 @@ app appStateRef = do
             mInc <- liftIO $ getIncSize getName' getSize' tree selectedPath
             let utils = Utils renderProfileHtml (renderProfileSummary totalStats) arrDumpProf getName' getSize'
                 newTM = SearchedHtml utils tree "profile"
-                newAppState = setTreeMode os newTM socket debuggee' state
+                newAppState = updateAppState os (setTM newTM) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderProfilePage utils tree "profile" selectedPath mInc
           RunningMode -> Scotty.redirect "/connect"
@@ -2230,7 +2233,7 @@ app appStateRef = do
       Connected socket debuggee' mode' ->
         case mode' of
           PausedMode os -> do
-            let newAppState = setTreeMode os (SavedAndGCRoots undefined) socket debuggee' state
+            let newAppState = updateAppState os (setTM $ SavedAndGCRoots undefined) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/connect"
           RunningMode -> Scotty.redirect "/connect"
@@ -2293,7 +2296,7 @@ app appStateRef = do
             mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
 
             let (newTM, utils) = countTM words_histogram tree "arrWordsCount"
-                newAppState = setTreeMode os newTM socket debuggee' state
+                newAppState = updateAppState os (setTM newTM) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderCountPage "ARR_WORDS" utils tree "arrWordsCount" selectedPath mInc
           RunningMode -> Scotty.redirect "/connect"
@@ -2327,7 +2330,7 @@ app appStateRef = do
             let tree = mkIOTree debuggee' top_closure g_children renderArrWordsLines id
             mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
             let (newTM, utils) = countTM Nothing tree "stringsCount"
-                newAppState = setTreeMode os newTM socket debuggee' state
+                newAppState = updateAppState os (setTM newTM) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
 
             Scotty.html $ renderCountPage "Strings" utils tree "stringsCount" selectedPath mInc
@@ -2349,7 +2352,7 @@ app appStateRef = do
             let tree = mkIOTree debuggee' top_closure g_children undefined id
             let utils = Utils renderThunkAnalysisHtml renderThunkAnalysisSummary arrDumpThunk (\_->Nothing) (\_->0) 
             let newTM = SearchedHtml utils tree "thunkAnalysis"
-                newAppState = setTreeMode os newTM socket debuggee' state
+                newAppState = updateAppState os (setTM newTM) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderThunkAnalysisPage utils tree "thunkAnalysis" selectedPath Nothing
           RunningMode -> Scotty.redirect "/connect"
@@ -2392,7 +2395,7 @@ app appStateRef = do
             res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
             let tree = mkRetainerTree debuggee' res
             let newTM = Retainer renderClosureDetails tree
-                newAppState = setTreeMode os newTM socket debuggee' state
+                newAppState = updateAppState os (setTM newTM) socket debuggee' state
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
             liftIO $ writeIORef appStateRef newAppState
             Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
@@ -2439,9 +2442,7 @@ app appStateRef = do
                               "Era" -> maybe [] (pure . UIEraFilter invert) (parseEraRange $ T.pack pattern)
                               "CCID" -> maybe [] (pure . UICcId invert) (readMaybe pattern) 
                               _ -> []
-            let newOs = addFilters newFilter os  
-                newMajorState = Connected socket debuggee' (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let newAppState = updateAppState os (addFilters newFilter) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/modifyFilters"
           RunningMode -> Scotty.redirect "/connect"
@@ -2458,9 +2459,7 @@ app appStateRef = do
                                n | n < 0 -> _filters os 
                                _ -> let (as, bs) = Prelude.splitAt index (_filters os) 
                                     in as ++ (tail bs)
-                newOs = setFilters newFilters os
-                newMajorState = Connected socket debuggee' (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+                newAppState = updateAppState os (setFilters newFilters) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/modifyFilters"
           RunningMode -> Scotty.redirect "/connect"
@@ -2472,9 +2471,7 @@ app appStateRef = do
       Connected socket debuggee' mode' -> 
         case mode' of
           PausedMode os -> do
-            let newOs = setFilters [] os
-                newMajorState = Connected socket debuggee' (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let newAppState = updateAppState os (setFilters []) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/modifyFilters"
           RunningMode -> Scotty.redirect "/connect"
@@ -2491,9 +2488,8 @@ app appStateRef = do
                                   Nothing -> _resultSize os
                                   Just n | n <= 0 -> Nothing
                                   n -> n
-            let newOs = os { _resultSize = newResultSize } 
-                newMajorState = Connected socket debuggee' (PausedMode newOs)
-                newAppState = state & majorState .~ newMajorState
+            let setLimit os' = os' { _resultSize = newResultSize }
+                newAppState = updateAppState os setLimit socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect "/connect"
           RunningMode -> Scotty.redirect "/connect"
