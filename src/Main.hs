@@ -1863,6 +1863,9 @@ invertParam :: Data.String.IsString t => ParamGet t Bool
 invertParam getParam = readParam "invert" getParam read False
 indexParam :: Data.String.IsString t => ParamGet t Int
 indexParam getParam = readParam "index" getParam read (-1)
+searchLimitParam :: Data.String.IsString t => ParamGet t (Maybe Int)
+searchLimitParam getParam = readParam "index" getParam readMaybe Nothing
+
 
 buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
@@ -2395,6 +2398,7 @@ app appStateRef = do
             Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
+  {- Modify filters -}
   Scotty.get "/modifyFilters" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
@@ -2411,6 +2415,7 @@ app appStateRef = do
           PausedMode os -> Scotty.html $ renderModifyFilterPage (_filters os) (_version os)
           _ -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
+  {- Adds selected filter to list -}
   Scotty.post "/addFilter" $ do
     state <- liftIO $ readIORef appStateRef
     pattern <- patternParam Scotty.formParam
@@ -2441,6 +2446,7 @@ app appStateRef = do
             Scotty.redirect "/modifyFilters"
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
+  {- Deletes selected index from filters -}
   Scotty.post "/deleteFilter" $ do
     state <- liftIO $ readIORef appStateRef
     index <- indexParam Scotty.formParam
@@ -2459,6 +2465,7 @@ app appStateRef = do
             Scotty.redirect "/modifyFilters"
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/" 
+  {- Clears all filters -}
   Scotty.post "/clearFilters" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of 
@@ -2472,16 +2479,18 @@ app appStateRef = do
             Scotty.redirect "/modifyFilters"
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
+  {- Set the amount of results from filter searches etc. Input <= 0 -> no limit -}
   Scotty.post "/setSearchLimit" $ do
     state <- liftIO $ readIORef appStateRef
-    index <- indexParam Scotty.formParam
+    limit <- searchLimitParam Scotty.formParam
     case state ^. majorState of 
       Connected socket debuggee' mode' -> 
         case mode' of
           PausedMode os -> do
-            let newResultSize = case index of
-                                  n | n <= 0 -> Nothing
-                                  n -> Just n
+            let newResultSize = case limit of
+                                  Nothing -> _resultSize os
+                                  Just n | n <= 0 -> Nothing
+                                  n -> n
             let newOs = os { _resultSize = newResultSize } 
                 newMajorState = Connected socket debuggee' (PausedMode newOs)
                 newAppState = state & majorState .~ newMajorState
