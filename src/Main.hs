@@ -1923,7 +1923,9 @@ genericGet appStateRef index renderPage = do
           PausedMode os -> do 
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
-               Retainer{} -> Scotty.redirect "/searchWithFilters"
+               Retainer _ tree -> do
+                 mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
+                 Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
                SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
                  Scotty.html $ renderPage u tree name selectedPath mInc
@@ -1988,6 +1990,15 @@ handleImg tree nodeName pageName format' selectedPath = do
       svgContent <- liftIO $ BS.readFile svgPath
       Scotty.html $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
     _ -> error "Error: failed to find selected node in tree"
+
+handleModifyFilters :: IORef AppState -> ActionT IO ()
+handleModifyFilters appStateRef = do
+  state <- liftIO $ readIORef appStateRef
+  case state ^. majorState of
+    Connected _ _ (PausedMode os) ->
+      Scotty.html $ renderModifyFilterPage (_filters os) (_version os)
+    _ -> Scotty.redirect "/"
+
 
 closureGetName :: ClosureDetails -> Maybe String
 closureGetName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
@@ -2233,20 +2244,15 @@ app appStateRef = do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected _ _ (PausedMode os) ->
+      Connected _ _ (PausedMode os) -> do
+        let handleTree :: IOTree a name -> (a -> ActionT IO ()) -> ActionT IO ()
+            handleTree tree dump = case getSubTree tree selectedPath of
+                                     Just (IOTreeNode node' _) -> dump node'
+                                     Nothing -> error "Error: selected node doesn't exist"
         case _treeMode os of
-          SavedAndGCRoots _ -> do
-            case getSubTree (_treeSavedAndGCRoots os) selectedPath of
-              Just (IOTreeNode node' _) -> dumpArrWord node'
-              Nothing -> error "Error: selected node doesn't exist"
-          Retainer _ tree -> do
-            case getSubTree tree selectedPath of
-              Just (IOTreeNode node' _) -> dumpArrWord node'
-              Nothing -> error "Error: selected node doesn't exist"
-          SearchedHtml Utils{..} tree _  -> do
-            case getSubTree tree selectedPath of
-              Just (IOTreeNode node' _) -> _dumpArrWords node'
-              Nothing -> error "Error: selected node doesn't exist"
+          SavedAndGCRoots _ -> handleTree (_treeSavedAndGCRoots os) dumpArrWord
+          Retainer _ tree -> handleTree tree dumpArrWord     
+          SearchedHtml Utils{..} tree _ -> handleTree tree _dumpArrWords
           _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- See arr_words count -}
@@ -2346,17 +2352,7 @@ app appStateRef = do
         Scotty.redirect ("/connect?selected=" <> TL.fromStrict (encodePath selectedPath))
       Setup{} -> Scotty.redirect "/" 
   {- Search with filters -}
-  Scotty.get "/searchWithFilters" $ do
-    state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
-    case state ^. majorState of
-      Connected _ _ (PausedMode os) -> do
-        case _treeMode os of
-          Retainer _ tree -> do
-            mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-            Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
-          _ -> error "Error: incorrect tree type" 
-      _ -> Scotty.redirect "/" 
+  genericGet appStateRef "/searchWithFilters" undefined
   Scotty.post "/searchWithFilters" $ do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
@@ -2374,18 +2370,8 @@ app appStateRef = do
         Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
       _ -> Scotty.redirect "/" 
   {- Modify filters -}
-  Scotty.get "/modifyFilters" $ do
-    state <- liftIO $ readIORef appStateRef
-    case state ^. majorState of
-      Connected _ _ (PausedMode os) ->
-          Scotty.html $ renderModifyFilterPage (_filters os) (_version os)
-      _ -> Scotty.redirect "/" 
-  Scotty.post "/modifyFilters" $ do
-    state <- liftIO $ readIORef appStateRef
-    case state ^. majorState of
-      Connected _ _ (PausedMode os) ->
-        Scotty.html $ renderModifyFilterPage (_filters os) (_version os)
-      _ -> Scotty.redirect "/"
+  Scotty.get "/modifyFilters" (handleModifyFilters appStateRef)
+  Scotty.post "/modifyFilters" (handleModifyFilters appStateRef)
   {- Adds selected filter to list -}
   Scotty.post "/addFilter" $ do
     state <- liftIO $ readIORef appStateRef
