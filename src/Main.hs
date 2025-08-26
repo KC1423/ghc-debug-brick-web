@@ -1392,6 +1392,8 @@ renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' o
       Retainer {} -> pack "Retainers"
       Searched {} -> pack "Search Results"
       SearchedHtml {} -> pack "Search Results"
+    
+    --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
 
@@ -1663,6 +1665,12 @@ detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure' _excSize info') = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ _labelInParent info' <> " | " <> pack (closureShowAddress closure') <> " | " <> _pretty info' 
+  {-table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
+    tr_ [style_ "background-color: #f5f5f5; cursor: pointer;"] $ do
+      td_ [style_ "padding: 12px; border: 1px solid #ccc; text-align: left;"] $ toHtml $ _labelInParent info'
+      td_ [style_ "padding: 12px; border: 1px solid #ccc; text-align: left;"] $ toHtml $ pack (closureShowAddress closure')
+      td_ [style_ "padding: 12px; border: 1px solid #ccc; text-align: left;"] $ toHtml $ _pretty info'
+-}
 renderClosureHtml (InfoDetails info') = div_ [class_ "closure-row"] $ do
   li_ $ toHtml $ _labelInParent info' <> " | " <> _pretty info' 
 renderClosureHtml (LabelNode t) = div_ [class_ "closure-row"] $ do
@@ -1759,7 +1767,7 @@ getClosureIncSize getName' getSize' seen' node' = fst (go seen' node')
     listApply f res s xs = foldl step (res, s) xs
       where step (acc, st) x = let (a, st') = f st x in (acc + a, st') 
 
-type EdgeList = [(String, String)]
+type EdgeList = [(String, String, Int)]
 
 getClosureVizTree :: (a -> String) -> Set.Set String -> EdgeList -> IOTreeNode a name -> (Set.Set String, EdgeList)
 getClosureVizTree format' nodes edges (IOTreeNode n csE) = 
@@ -1773,7 +1781,7 @@ getClosureVizTree format' nodes edges (IOTreeNode n csE) =
                   (nodesFinal, childEdges) = listApply (getClosureVizTree format') (nodes'', edges) cs
                   children = [ format' n'
                              | IOTreeNode n' _ <- cs ]
-                  newEdges = map (\ch -> (ptr, ch)) children
+                  newEdges = map (\(ch, i) -> (ptr, ch, i)) (zip children [0..])
               in (nodesFinal, childEdges ++ newEdges)
   where
     listApply f (ns, es) xs =
@@ -1884,8 +1892,8 @@ buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
   --node sid [toLabel (pack sn :: Text), Data.GraphViz.style filled, fillColor Yellow, color Red]
   mapM_ (\(n, nid) -> node nid [toLabel (pack n :: Text)
                                {-, URL (TL.pack $ "https://localhost:3000/blah/" ++ show nid)-}]) nids
-  mapM_ (\(a, b) -> case (lookup a nids, lookup b nids) of
-                      (Just x, Just y) -> edge x y []
+  mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
+                      (Just x, Just y) -> edge x y [toLabel (pack (show eid) :: Text)]
                       z -> error ("Error in building closure graph: " ++ 
                                   "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
   where nids = zipWith (\n i -> (n,i)) nodes [1..]
