@@ -147,6 +147,7 @@ data ClosureDetails = ClosureDetails
 data Utils a = Utils {
   _renderRow :: a -> Html (),
   _renderSummary :: a -> [Int] -> Maybe (Int, Bool) -> Html (),
+  _graphFormat :: a -> String,
   _dumpArrWords :: a -> Web.Scotty.Internal.Types.ActionT IO (),
   _getName :: a -> Maybe String,
   _getSize :: a -> Int

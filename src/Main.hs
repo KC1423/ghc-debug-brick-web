@@ -26,11 +26,13 @@ import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
 import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg))
+import Data.GraphViz.Attributes.Complete (Attribute(URL))
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph)
 import Web.Scotty.Internal.Types
 import Data.Functor.Identity (Identity)
 import Data.String (IsString)
+import Debug.Trace
 
 import Brick
 import Brick.BChan
@@ -1509,7 +1511,7 @@ renderIncSize incSize capped _ = do
   else mempty-}
 
 renderImgPage :: String -> String -> [Int] -> Bool -> TL.Text -> TL.Text
-renderImgPage returnTo name selectedPath capped _ =
+renderImgPage returnTo name selectedPath capped svgContent =
   renderText $ do
     h1_ $ toHtml $ "Visualisation of " ++ name
     if capped then h2_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
@@ -1520,9 +1522,9 @@ renderImgPage returnTo name selectedPath capped _ =
                 , download_ "graph.svg"
                 , style_ "display: inline-block; margin-top: 1em;"
                 ] "Download SVG"
-      img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
+      --img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
       -- this code renders the svg with JS so it is interactive
-      {-div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; height: 80vh; overflow: hidden;"] $ 
+      div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; height: 80vh; overflow: hidden;"] $ 
         toHtmlRaw svgContent
       script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
       script_ $ mconcat
@@ -1534,7 +1536,7 @@ renderImgPage returnTo name selectedPath capped _ =
         , "  maxZoom: 10,"
         , "  minZoom: 0.1"
         , "});"
-        ]-}
+        ]
       
 reconnectLink :: HtmlT Identity ()
 reconnectLink = do
@@ -1706,10 +1708,10 @@ renderInfoSummary info' = do
   case _profHeaderInfo info' of
     Just x ->
       let label' = case x of 
-                     Debug.RetainerHeader{} -> "Retainer info: "
-                     Debug.LDVWord{} -> "LDV info: "
-                     Debug.EraWord{} -> "Era: "
-                     Debug.OtherHeader{} -> "Other: "
+                     Debug.RetainerHeader{} -> "Retainer info"
+                     Debug.LDVWord{} -> "LDV info"
+                     Debug.EraWord{} -> "Era"
+                     Debug.OtherHeader{} -> "Other"
       in summaryEntry label' (renderProfHeader x)
     Nothing -> mempty
   where renderProfHeader pinfo@(Debug.RetainerHeader {}) = show pinfo
@@ -1804,10 +1806,20 @@ plainUIFilters :: [UIFilter] -> Html ()
 plainUIFilters fs = mapM_ (uncurry renderUIFilterHtml) (zip fs (repeat (-1)))
 
 closureFormat :: ClosureDetails -> String
-closureFormat (ClosureDetails clo _ inf) = closureShowAddress clo ++ "\n" ++ takeWhile (/=' ') (unquote (show (_pretty inf)))
+closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $ 
+  [ payload
+  , "Address: " ++ closureShowAddress clo
+  , "Size: " ++ show (getSize excSize') ++ "B" ]
+  where payload = if savedObj label && (head body /= '_' && '#' `notElem` body)
+                    then takeWhile (/=' ') body
+                    else trunc body
+        savedObj s = (s == "Saved Object" || List.isPrefixOf "Field " s || s == "Indirectee")
+        label = T.unpack (_labelInParent inf)
+        body = T.unpack (_pretty inf)
 closureFormat (InfoDetails inf) = unquote (show (_labelInParent inf))
 closureFormat (LabelNode l) = unquote $ show l
-closureFormat x = error $ "viztree format, missing implementation: " ++ show x
+closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack $ clabel <> "\n" <> prettyCCS ccspayload
+closureFormat (CCDetails clabel cc) = T.unpack $ clabel <> "\n" <> prettyCC cc
 
 parsePath :: String -> [Int]
 parsePath [] = []
@@ -1871,7 +1883,8 @@ buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
   -- possible style for source node, except this logic doesn't always select the source node
   -- nids@((sn, sid):rest)
   --node sid [toLabel (pack sn :: Text), Data.GraphViz.style filled, fillColor Yellow, color Red]
-  mapM_ (\(n, nid) -> node nid [toLabel (pack n :: Text)]) nids
+  mapM_ (\(n, nid) -> node nid [toLabel (pack n :: Text)
+                               {-, URL (TL.pack $ "https://localhost:3000/blah/" ++ show nid)-}]) nids
   mapM_ (\(a, b) -> case (lookup a nids, lookup b nids) of
                       (Just x, Just y) -> edge x y []
                       z -> error ("Error in building closure graph: " ++ 
@@ -1974,6 +1987,15 @@ handleConnect appStateRef state formValue options isValid' connect = do
         else Scotty.html renderBadSocketPage
     Nothing -> Scotty.html renderBadSocketPage
 
+getNodeName :: IOTreeNode ClosureDetails name -> String
+getNodeName (IOTreeNode n _) = go n
+  where go (ClosureDetails c _ _) = closureShowAddress c 
+        go (InfoDetails inf) = unquote (show (_labelInParent inf))
+        go (LabelNode l) = unquote $ show l
+        go (CCSDetails clabel _ _) = T.unpack $ clabel
+        go (CCDetails clabel _) = T.unpack $ clabel
+
+
 handleImg :: IOTree a name -> (IOTreeNode a name -> String) -> String -> (a -> String) -> [Int] -> Scotty.ActionM ()
 handleImg tree nodeName pageName format' selectedPath = do
   case getSubTree tree selectedPath of
@@ -2001,17 +2023,19 @@ handleModifyFilters appStateRef = do
 
 
 closureGetName :: ClosureDetails -> Maybe String
-closureGetName x = case x of ClosureDetails{} -> Just (closureFormat x); _ -> Nothing
+closureGetName x = case x of ClosureDetails{} -> Just (getNodeName (IOTreeNode x undefined)); _ -> Nothing
 closureGetSize :: ClosureDetails -> Int
 closureGetSize x = case x of ClosureDetails _ excSize' _ -> getSize excSize'; _ -> 0
 countGetName :: ArrWordsLine a -> Maybe String
-countGetName x = case x of FieldLine c -> Just (closureFormat c); _ -> Nothing
+countGetName x = case x of FieldLine c -> Just (getNodeName (IOTreeNode c undefined)); _ -> Nothing
+countFormat :: ArrWordsLine a -> String
+countFormat x = case x of FieldLine c -> closureFormat c; _ -> ""
 countGetSize :: ArrWordsLine a -> Int
 countGetSize x = case x of FieldLine (ClosureDetails _ excSize' _) -> getSize excSize'; _ -> 0
 countTM :: Show a => Maybe (Html ()) -> IOTree (ArrWordsLine a) Name -> String
         -> (TreeMode, Utils (ArrWordsLine a))
 countTM histo tree name = (SearchedHtml utils tree name, utils)
-  where utils = Utils renderCountHtml (renderCountSummary histo) arrDumpCount countGetName countGetSize
+  where utils = Utils renderCountHtml (renderCountSummary histo) countFormat arrDumpCount countGetName countGetSize
 
 updateAppState :: t -> (t -> OperationalState) -> SocketInfo -> Debuggee -> AppState -> AppState
 updateAppState os f socket debuggee' state = newAppState
@@ -2185,12 +2209,12 @@ app appStateRef = do
         case _treeMode os of
           SavedAndGCRoots _ -> do
             let tree = _treeSavedAndGCRoots os
-            handleImg tree (\(IOTreeNode n' _) -> closureFormat n') "connect" closureFormat selectedPath
+            handleImg tree getNodeName "connect" closureFormat selectedPath
           Retainer _ tree -> do
-            handleImg tree (\(IOTreeNode n' _) -> closureFormat n') "searchWithFilters" closureFormat selectedPath
+            handleImg tree getNodeName "searchWithFilters" closureFormat selectedPath
           SearchedHtml Utils{..} tree pageName -> do
             let nameFn = maybe "" id . _getName 
-            handleImg tree (\(IOTreeNode n' _) -> nameFn n') pageName nameFn selectedPath
+            handleImg tree (\(IOTreeNode n' _) -> nameFn n') pageName _graphFormat selectedPath
           _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- View profile (level 1 and 2) -}
@@ -2219,12 +2243,13 @@ app appStateRef = do
                 return (show i, filledC)
               mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee' (pack lbl) filledItem) filled
         let tree = mkIOTree debuggee' sortedProfiles gChildren renderProfileLine id
-        let getName' x = case x of ClosureLine c -> Just (closureFormat c); _ -> Nothing
+        let profFormat x = case x of ClosureLine c -> closureFormat c; _ -> ""
+        let getName' x = case x of ClosureLine c -> Just (getNodeName (IOTreeNode c undefined)); _ -> Nothing
         let getSize' x = case x of
                            ClosureLine (ClosureDetails _ excSize' _) -> getSize excSize'
                            _ -> 0
         mInc <- liftIO $ getIncSize getName' getSize' tree selectedPath
-        let utils = Utils renderProfileHtml (renderProfileSummary totalStats) arrDumpProf getName' getSize'
+        let utils = Utils renderProfileHtml (renderProfileSummary totalStats) profFormat arrDumpProf getName' getSize'
             newTM = SearchedHtml utils tree "profile"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
@@ -2335,7 +2360,7 @@ app appStateRef = do
 
             g_children _ (ThunkLine {}) = pure []
         let tree = mkIOTree debuggee' top_closure g_children undefined id
-        let utils = Utils renderThunkAnalysisHtml renderThunkAnalysisSummary arrDumpThunk (\_->Nothing) (\_->0) 
+        let utils = Utils renderThunkAnalysisHtml renderThunkAnalysisSummary (\_->"") arrDumpThunk (\_->Nothing) (\_->0) 
         let newTM = SearchedHtml utils tree "thunkAnalysis"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
