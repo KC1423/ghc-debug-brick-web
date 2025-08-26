@@ -1816,10 +1816,13 @@ closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $
         savedObj s = (s == "Saved Object" || List.isPrefixOf "Field " s || s == "Indirectee")
         label = T.unpack (_labelInParent inf)
         body = T.unpack (_pretty inf)
-closureFormat (InfoDetails inf) = unquote (show (_labelInParent inf))
-closureFormat (LabelNode l) = unquote $ show l
-closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack $ clabel <> "\n" <> prettyCCS ccspayload
-closureFormat (CCDetails clabel cc) = T.unpack $ clabel <> "\n" <> prettyCC cc
+closureFormat (InfoDetails inf) = T.unpack (_labelInParent inf)
+closureFormat (LabelNode l) = T.unpack l
+closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack clabel ++ "\n" ++ ccsFormat ccspayload
+closureFormat (CCDetails clabel cc) = "Cost centre: " ++ T.unpack clabel ++ "\n" ++ ccFormat cc
+ccsFormat Debug.CCSPayload{ccsCc = cc} = ccFormat cc
+ccFormat Debug.CCPayload{..} = List.intercalate "\n" $
+  [ "Label: " ++ ccLabel, "Module: " ++ ccMod, "Location: " ++ ccLoc]
 
 parsePath :: String -> [Int]
 parsePath [] = []
@@ -1829,10 +1832,6 @@ parseProfileLevel :: String -> ProfileLevel
 parseProfileLevel "1" = OneLevel
 parseProfileLevel "2" = TwoLevel  
 parseProfileLevel _ = error "Error: profile level not supported"
-
-unquote :: String -> String
-unquote ('\"':xs) | last xs == '\"' = init xs
-unquote xs = xs
 
 trunc :: String -> String
 trunc s = take n s ++ (if length s > n then "..." else "")
@@ -1990,8 +1989,8 @@ handleConnect appStateRef state formValue options isValid' connect = do
 getNodeName :: IOTreeNode ClosureDetails name -> String
 getNodeName (IOTreeNode n _) = go n
   where go (ClosureDetails c _ _) = closureShowAddress c 
-        go (InfoDetails inf) = unquote (show (_labelInParent inf))
-        go (LabelNode l) = unquote $ show l
+        go (InfoDetails inf) = T.unpack (_labelInParent inf)
+        go (LabelNode l) = T.unpack l
         go (CCSDetails clabel _ _) = T.unpack $ clabel
         go (CCDetails clabel _) = T.unpack $ clabel
 
