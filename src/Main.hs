@@ -1782,25 +1782,26 @@ getClosureIncSize getName' getSize' seen' node' = fst (go seen' node')
 
 type EdgeList = [(String, String, Int)]
 
-getClosureVizTree :: (a -> String) -> Set.Set String -> EdgeList -> IOTreeNode a name -> (Set.Set String, EdgeList)
-getClosureVizTree format' nodes edges (IOTreeNode n csE) = 
-  let ptr = format' n
+getClosureVizTree :: (a -> String) -> (a -> String) -> Set.Set String -> [(String, String)] -> EdgeList -> IOTreeNode a name -> (Set.Set String, [(String, String)], EdgeList)
+getClosureVizTree getName' format' nodes formattedNodes edges (IOTreeNode n csE) = 
+  let ptr = getName' n
   in if Set.member ptr nodes
-     then (nodes, [])
+     then (nodes, formattedNodes, [])
      else case csE of
-            Left _ -> (Set.insert ptr nodes, [])
+            Left _ -> (Set.insert ptr nodes, (ptr, format' n) : formattedNodes, [])
             Right cs -> 
               let nodes'' = Set.insert ptr nodes
-                  (nodesFinal, childEdges) = listApply (getClosureVizTree format') (nodes'', edges) cs
-                  children = [ format' n'
+                  fnodes'' = (ptr, format' n) : formattedNodes
+                  (nodesFinal, fNodesFinal, childEdges) = listApply (getClosureVizTree getName' format') (nodes'', fnodes'', edges) cs
+                  children = [ getName' n'
                              | IOTreeNode n' _ <- cs ]
                   newEdges = map (\(ch, i) -> (ptr, ch, i)) (zip children [0..])
-              in (nodesFinal, childEdges ++ newEdges)
+              in (nodesFinal, fNodesFinal, childEdges ++ newEdges)
   where
-    listApply f (ns, es) xs =
-      foldl (\(nsAcc, esAcc) x ->
-               let (ns', es') = f nsAcc [] x
-               in (ns', esAcc ++ es')) (ns, es) xs
+    listApply f (ns, fns, es) xs =
+      foldl (\(nsAcc, fnsAcc, esAcc) x ->
+               let (ns', fns', es') = f nsAcc fnsAcc [] x
+               in (ns', fns', esAcc ++ es')) (ns, fns, es) xs
 
 renderBytesHtml :: Real a => a -> String
 renderBytesHtml n = getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes))
@@ -1834,7 +1835,7 @@ closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $
   where payload = if savedObj label' && (head body /= '_' && '#' `notElem` body)
                     then takeWhile (/=' ') body
                     else trunc body
-        savedObj s = (s == "Saved Object" || List.isPrefixOf "Field " s || s == "Indirectee")
+        savedObj s = (s == "Saved Object" || List.isPrefixOf "Field" s || s == "Indirectee")
         label' = T.unpack (_labelInParent inf)
         body = T.unpack (_pretty inf)
 closureFormat (InfoDetails inf) = T.unpack (_labelInParent inf)
@@ -1900,12 +1901,12 @@ searchLimitParam :: Data.String.IsString t => ParamGet t (Maybe Int)
 searchLimitParam getParam = readParam "index" getParam readMaybe Nothing
 
 
-buildClosureGraph :: [String] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
-buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
+buildClosureGraph :: [String] -> [(String, String)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
+buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
   -- possible style for source node, except this logic doesn't always select the source node
   -- nids@((sn, sid):rest)
   --node sid [toLabel (pack sn :: Text), Data.GraphViz.style filled, fillColor Yellow, color Red]
-  mapM_ (\(n, nid) -> node nid [toLabel (pack n :: Text)
+  mapM_ (\(n, nid) -> node nid [toLabel (pack (maybe "" id (lookup n fnodes)) :: Text)
                                {-, URL (TL.pack $ "https://localhost:3000/blah/" ++ show nid)-}]) nids
   mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
                       (Just x, Just y) -> edge x y [toLabel (pack (show eid) :: Text)]
@@ -2112,23 +2113,23 @@ handleConnect appStateRef state formValue options isValid' connect = do
     Nothing -> Scotty.html renderBadSocketPage
 
 getNodeName :: IOTreeNode ClosureDetails name -> String
-getNodeName (IOTreeNode n _) = go n
-  where go (ClosureDetails c _ _) = closureShowAddress c 
-        go (InfoDetails inf) = T.unpack (_labelInParent inf)
-        go (LabelNode l) = T.unpack l
-        go (CCSDetails clabel _ _) = T.unpack $ clabel
-        go (CCDetails clabel _) = T.unpack $ clabel
+getNodeName (IOTreeNode n _) = closureName n
+closureName (ClosureDetails c _ _) = closureShowAddress c 
+closureName (InfoDetails inf) = T.unpack (_labelInParent inf)
+closureName (LabelNode l) = T.unpack l
+closureName (CCSDetails clabel _ _) = T.unpack $ clabel
+closureName (CCDetails clabel _) = T.unpack $ clabel
 
 
-handleImg :: IOTree a name -> (IOTreeNode a name -> String) -> String -> (a -> String) -> [Int] -> Scotty.ActionM ()
-handleImg tree nodeName pageName format' selectedPath = do
+handleImg :: IOTree a name -> (IOTreeNode a name -> String) -> (a -> String) -> String -> (a -> String) -> [Int] -> Scotty.ActionM ()
+handleImg tree nodeName getName' pageName format' selectedPath = do
   case getSubTree tree selectedPath of
     Just subtree -> do
       (expSubtree, capped) <- liftIO $ expandNodeSafe subtree format'
       let name = nodeName subtree
-      let (nodes', vizEdges) = getClosureVizTree format' Set.empty [] expSubtree
+      let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
-      let graph = buildClosureGraph vizNodes vizEdges
+      let graph = buildClosureGraph vizNodes fNodes vizEdges
       liftIO $ do 
         createDirectoryIfMissing True "tmp"
         _ <- runGraphviz graph Svg svgPath
@@ -2147,11 +2148,11 @@ handleModifyFilters appStateRef = do
 
 
 closureGetName :: ClosureDetails -> Maybe String
-closureGetName x = case x of ClosureDetails{} -> Just (getNodeName (IOTreeNode x undefined)); _ -> Nothing
+closureGetName x = case x of ClosureDetails{} -> Just (closureName x); _ -> Nothing
 closureGetSize :: ClosureDetails -> Int
 closureGetSize x = case x of ClosureDetails _ excSize' _ -> getSize excSize'; _ -> 0
 countGetName :: ArrWordsLine a -> Maybe String
-countGetName x = case x of FieldLine c -> Just (getNodeName (IOTreeNode c undefined)); _ -> Nothing
+countGetName x = case x of FieldLine c -> Just (closureName c); _ -> Nothing
 countFormat :: ArrWordsLine a -> String
 countFormat x = case x of FieldLine c -> closureFormat c; _ -> ""
 countGetSize :: ArrWordsLine a -> Int
@@ -2336,12 +2337,12 @@ app appStateRef = do
         case _treeMode os of
           SavedAndGCRoots _ -> do
             let tree = _treeSavedAndGCRoots os
-            handleImg tree getNodeName "connect" closureFormat selectedPath
+            handleImg tree getNodeName closureName "connect" closureFormat selectedPath
           Retainer _ tree -> do
-            handleImg tree getNodeName "searchWithFilters" closureFormat selectedPath
+            handleImg tree getNodeName closureName "searchWithFilters" closureFormat selectedPath
           SearchedHtml Utils{..} tree pageName -> do
             let nameFn = maybe "" id . _getName 
-            handleImg tree (\(IOTreeNode n' _) -> nameFn n') pageName _graphFormat selectedPath
+            handleImg tree (\(IOTreeNode n' _) -> nameFn n') nameFn pageName _graphFormat selectedPath
           _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- View profile (level 1 and 2) -}
@@ -2371,7 +2372,7 @@ app appStateRef = do
               mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee' (pack lbl) filledItem) filled
         let tree = mkIOTree debuggee' sortedProfiles gChildren renderProfileLine id
         let profFormat x = case x of ClosureLine c -> closureFormat c; _ -> ""
-        let getName' x = case x of ClosureLine c -> Just (getNodeName (IOTreeNode c undefined)); _ -> Nothing
+        let getName' x = case x of ClosureLine c -> Just (closureName c); _ -> Nothing
         let getSize' x = case x of
                            ClosureLine (ClosureDetails _ excSize' _) -> getSize excSize'
                            _ -> 0
