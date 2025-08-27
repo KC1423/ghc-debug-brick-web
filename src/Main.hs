@@ -33,6 +33,14 @@ import Web.Scotty.Internal.Types
 import Data.Functor.Identity (Identity)
 import Data.String (IsString)
 import Debug.Trace
+import qualified Codec.Picture as JP
+import qualified Graphics.Rasterific as RA
+import qualified Graphics.Rasterific.Texture as RA
+import Data.Colour.Names (blue, white, black)
+import Data.Colour (Colour)
+import Data.Colour.SRGB (toSRGB, channelRed, channelGreen, channelBlue)
+import qualified Data.ByteString.Lazy as BL
+import Graphics.Text.TrueType (loadFontFile, Font)
 
 import Brick
 import Brick.BChan
@@ -823,7 +831,6 @@ stringsAction dbg = do
         )
 
 
-data ArrWordsLine k = CountLine k Int Int | FieldLine ClosureDetails
 
 
 -- STATUS: Done
@@ -901,7 +908,6 @@ arrWordsAction dbg = do
             & treeMode .~ Searched renderWithHistogram tree
         )
 
-data ThunkLine = ThunkLine (Maybe SourceInformation) Count
 
 -- STATUS: Done
 thunkAnalysisAction :: Debuggee -> EventM n OperationalState ()
@@ -963,7 +969,6 @@ filterOrRunM dbg form doRun parse createFilterM = do
         modify $ (resetFooter . addFilters newFilter)
     Nothing -> modify resetFooter
 
-data ProfileLine  = ProfileLine GDP.ProfileKey GDP.ProfileKeyArgs CensusStats | ClosureLine ClosureDetails
 
 -- STATUS: Done
 renderProfileLine :: ProfileLine -> [Widget Name]
@@ -1298,6 +1303,12 @@ myAppHandleEvent brickEvent = do
           return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
+data ArrWordsLine k = CountLine k Int Int | FieldLine ClosureDetails
+
+data ThunkLine = ThunkLine (Maybe SourceInformation) Count
+
+data ProfileLine  = ProfileLine GDP.ProfileKey GDP.ProfileKeyArgs CensusStats | ClosureLine ClosureDetails
+
 
 {- New code here -}
 
@@ -1479,6 +1490,7 @@ renderCountSummary mh line path mInc = do
         div_ [ style_ "flex: 1;" ] $ do
           h3_ "Histogram: "
           ul_ $ histo
+          img_ [src_ "/histogram", alt_ "Histogram", style_ "max-width: 100%; height: auto; margin-top: 1rem; border: 1px solid #000000;" ]
       Nothing -> mempty
 
     where
@@ -1577,6 +1589,7 @@ renderThunkAnalysisPage Utils{..} tree name selectedPath mInc = renderText $ do
   h1_ "Thunk analysis"
   reconnectLink
   genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
+  
 
 renderFilterSearchPage :: (Show name, Ord name) => IOTree ClosureDetails name -> [UIFilter] 
                        -> [Int] -> Maybe (Int, Bool) -> TL.Text
@@ -1818,17 +1831,19 @@ closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $
   [ payload
   , "Address: " ++ closureShowAddress clo
   , "Size: " ++ show (getSize excSize') ++ "B" ]
-  where payload = if savedObj label && (head body /= '_' && '#' `notElem` body)
+  where payload = if savedObj label' && (head body /= '_' && '#' `notElem` body)
                     then takeWhile (/=' ') body
                     else trunc body
         savedObj s = (s == "Saved Object" || List.isPrefixOf "Field " s || s == "Indirectee")
-        label = T.unpack (_labelInParent inf)
+        label' = T.unpack (_labelInParent inf)
         body = T.unpack (_pretty inf)
 closureFormat (InfoDetails inf) = T.unpack (_labelInParent inf)
 closureFormat (LabelNode l) = T.unpack l
 closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack clabel ++ "\n" ++ ccsFormat ccspayload
 closureFormat (CCDetails clabel cc) = "Cost centre: " ++ T.unpack clabel ++ "\n" ++ ccFormat cc
+ccsFormat :: GenCCSPayload ccsPtr CCPayload -> [Char]
 ccsFormat Debug.CCSPayload{ccsCc = cc} = ccFormat cc
+ccFormat :: CCPayload -> [Char]
 ccFormat Debug.CCPayload{..} = List.intercalate "\n" $
   [ "Label: " ++ ccLabel, "Module: " ++ ccMod, "Location: " ++ ccLoc]
 
@@ -1898,6 +1913,7 @@ buildClosureGraph nodes edges = digraph (Str "Visualisation") $ do
                                   "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
   where nids = zipWith (\n i -> (n,i)) nodes [1..]
 
+
 histogramHtml :: Int -> [GD.Size] -> Html ()
 histogramHtml boxes m = do
   mapM_ displayLine (bin 0 (map calcPercentage (List.sort m )))
@@ -1905,14 +1921,115 @@ histogramHtml boxes m = do
     Size maxSize = maximum m
     calcPercentage (Size tot) = (tot, (fromIntegral tot/ fromIntegral maxSize) * 100 :: Double)
     displayLine (l, h, n, tot) =
-      li_ $ toHtml $ show l <> "%-" <> show h <> "%: " <> show n <> " " <> renderBytesHtml tot
+      li_ $ toHtml $ show l <> "%-" <> show h <> "% (" <> show n <> " objects, total size: " <> renderBytesHtml tot ++ ")"
     step = fromIntegral (ceiling @Double @Int (100 / fromIntegral boxes))
     bin _ [] = []
-    bin k xs = case now of
-                 [] -> bin (k + step) later
-                 _ -> (k, k+step, length now, sum (map fst now)) : bin (k + step) later
-      where
-        (now, later) = span ((<= k + step) . snd) xs
+    bin k xs =
+      let upper = min (k + step) 100
+          (now, later) = span (\(_, p) -> p <= upper) xs
+      in case now of
+           [] -> bin (k + step) later
+           _  -> (round k :: Int, round upper :: Int, length now, sum (map fst now)) : bin (k + step) later
+
+renderHistogramImage :: Font -> Int -> [GD.Size] -> BL.ByteString
+renderHistogramImage font boxes sizes = JP.encodePng image
+  where
+    maxSize = maximum [s | GD.Size s <- sizes]
+    unSize (GD.Size s) = s
+    sortedSizes = List.sort (map unSize sizes)
+    
+    step = ceiling (fromIntegral maxSize / fromIntegral boxes :: Double) :: Int
+    bin _ [] = []
+    bin k xs =
+      let (now, later) = span (<= k + step) xs
+      in case now of
+          [] -> bin (k + step) later
+          _  -> (k, k + step, length now, sum now) : bin (k + step) later
+    bins = bin 0 sortedSizes
+
+    width = 800
+    height = 400
+    barWidth = (width - 80) `div` boxes
+    leftPadding = 50.0 :: Float
+    bottomPadding = 30.0 :: Float
+    topPadding = 10.0 :: Float
+    usableHeight = fromIntegral height - bottomPadding - topPadding
+
+    maxCount = maximum (0 : [count | (_, _, count, _) <- bins])
+
+    scaleY n = (fromIntegral n / fromIntegral maxCount) * usableHeight
+
+    image :: JP.Image JP.PixelRGBA8
+    image = RA.renderDrawing width height (toRGBA8 white) $ do
+      let axisColor = toRGBA8 black
+          fontSize :: RA.PointSize
+          fontSize = RA.PointSize 10
+
+      -- Y-axis
+      RA.withTexture (RA.uniformTexture axisColor) $
+        RA.stroke 2.0 RA.JoinRound (RA.CapRound, RA.CapRound) $
+          RA.line (RA.V2 leftPadding topPadding) (RA.V2 leftPadding (fromIntegral height - bottomPadding))
+
+      -- X-axis
+      RA.withTexture (RA.uniformTexture axisColor) $
+        RA.stroke 2.0 RA.JoinRound (RA.CapRound, RA.CapRound) $
+          RA.line (RA.V2 leftPadding (fromIntegral height - bottomPadding)) (RA.V2 (fromIntegral width - 10) (fromIntegral height - bottomPadding))
+
+      -- Bars
+      F.forM_ (zip [0..] bins) $ \(i, (lo, hi, count, _)) -> do
+        let x = leftPadding + fromIntegral (i * barWidth)
+            h = scaleY count
+            y = fromIntegral height - bottomPadding - h
+
+        -- Bar
+        RA.withTexture (RA.uniformTexture (toRGBA8 blue)) $
+          RA.fill $ RA.rectangle (RA.V2 x y) (fromIntegral barWidth - 2) h
+
+        -- X-axis label
+        let label' = show lo ++ "–" ++ show hi ++ "B"
+            labelX = x + 2
+            yOffset = 10
+            labelY = fromIntegral height - bottomPadding + 4 + yOffset
+        RA.withTexture (RA.uniformTexture axisColor) $
+          RA.printTextAt font fontSize (RA.V2 labelX labelY) label'
+
+        let xAxisTitle = "Object Size"
+            xAxisTitleSize = RA.PointSize 12
+            xAxisTitleX = leftPadding + (fromIntegral width - leftPadding) / 2 - 40  -- center-ish
+            xAxisTitleY = fromIntegral height - 5  -- slightly below x-axis
+        RA.withTexture (RA.uniformTexture axisColor) $
+          RA.printTextAt font xAxisTitleSize (RA.V2 xAxisTitleX xAxisTitleY) xAxisTitle
+
+      -- Y-axis ticks and labels
+      let yTicks = 5 :: Int
+      F.forM_ ([0..yTicks] :: [Int]) $ \ (i :: Int) -> do
+        let val = round (fromIntegral maxCount * fromIntegral i / fromIntegral yTicks :: Double) :: Int
+            yOffset = 10
+            y = fromIntegral height - bottomPadding - (fromIntegral i * usableHeight / fromIntegral yTicks)
+            label' = show val
+        -- Tick mark
+        RA.withTexture (RA.uniformTexture axisColor) $
+          RA.stroke 1.0 RA.JoinRound (RA.CapRound, RA.CapRound) $
+            RA.line (RA.V2 (leftPadding - 5) y) (RA.V2 leftPadding y)
+        -- Label
+        RA.withTexture (RA.uniformTexture axisColor) $
+          RA.printTextAt font fontSize (RA.V2 (leftPadding - 35) (y - 5 + yOffset)) label'
+
+      let yAxisTitle = "Freq"
+          yAxisTitleSize = RA.PointSize 12
+          yAxisTitleX = 5
+          yAxisTitleY = topPadding + (usableHeight / 2)
+      RA.withTexture (RA.uniformTexture axisColor) $
+        RA.printTextAt font yAxisTitleSize (RA.V2 yAxisTitleX yAxisTitleY) yAxisTitle
+
+toRGBA8 :: Colour Double -> JP.PixelRGBA8
+toRGBA8 c = 
+  let srgb = toSRGB c  -- Gives RGB Double in [0,1]
+      r = floor (channelRed srgb * 255) :: Integer 
+      g = floor (channelGreen srgb * 255) :: Integer
+      b = floor (channelBlue srgb * 255) :: Integer
+  in JP.PixelRGBA8 (fromIntegral r) (fromIntegral g) (fromIntegral b) 255
+
 
 autoScrollScript :: HtmlT Data.Functor.Identity.Identity ()
 autoScrollScript = script_ $ mconcat
@@ -2070,6 +2187,9 @@ app appStateRef = do
         Scotty.file filePath
       else
         Scotty.text "Profile dump not found."
+  Scotty.get "/histogram" $ do
+    Scotty.setHeader "Content-Type" "image/png"
+    Scotty.file "tmp/histo.png"
   {- Main page where sockets/snapshots can be selected for debugging -}
   Scotty.get "/" $ do
     state <- liftIO $ readIORef appStateRef
@@ -2305,6 +2425,8 @@ app appStateRef = do
             top_closure = [CountLine k (fromIntegral (BS.length k)) (length v) | (k, v) <- display_res]
 
             !words_histogram = Just $ histogramHtml 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
+            histogramImg f = renderHistogramImage f 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
+ 
             
             g_children d (CountLine b _ _) = do
               let cs = maybe Set.empty id (M.lookup b arrMap)
@@ -2314,6 +2436,14 @@ app appStateRef = do
               children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
               mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
             g_children d (FieldLine c) = map FieldLine <$> getChildren d c
+
+        eFont <- liftIO $ loadFontFile "DejaVuSans.ttf"
+        case eFont of 
+          Right font -> liftIO $ do 
+            createDirectoryIfMissing True "tmp"
+            BS.writeFile "tmp/histo.png" (histogramImg font)
+            return ()
+          Left _ -> error "Font file missing"
 
         let tree = mkIOTree debuggee' top_closure g_children renderArrWordsLines id
         mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
