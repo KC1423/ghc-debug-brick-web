@@ -41,12 +41,13 @@ import Data.Colour (Colour)
 import Data.Colour.SRGB (toSRGB, channelRed, channelGreen, channelBlue)
 import qualified Data.ByteString.Lazy as BL
 import Graphics.Text.TrueType (loadFontFile, Font)
-import GHC.RTS.Events (readEventLogFromFile)
 import Network.Wai.Parse (FileInfo(..))
 import Eventlog.Data (generateJsonValidate, HeapProfileData(..), eventlogHeapProfile, generateJson)
 import Eventlog.HtmlTemplate (templateString)
 import qualified Eventlog.Args as EA
 import Data.Aeson (encode)
+import GHC.Debug.Client.Query (dereferenceConDesc)
+import Data.Maybe (catMaybes)
 
 import Brick
 import Brick.BChan
@@ -1642,8 +1643,8 @@ renderFilterSearchPage tree filters' selectedPath mInc = renderText $ do
   renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
   autoScrollScript
 
-renderModifyFilterPage :: [UIFilter] -> Version -> TL.Text
-renderModifyFilterPage filters' dbgVersion = renderText $ do  
+renderModifyFilterPage :: ([String], [String]) -> [UIFilter] -> Version -> TL.Text
+renderModifyFilterPage (cons, cloTypes) filters' dbgVersion = renderText $ do  
   h1_ "Modify filters"
    
   div_ $ form_ [method_ "post", action_ "/searchWithFilters", style_ "display:inline"] $
@@ -1662,10 +1663,10 @@ renderModifyFilterPage filters' dbgVersion = renderText $ do
     div_ [ style_ "flex: 1;" ] $ do
       genFilterButtons "Enter closure address" "Address" 
       genFilterButtons "Enter info table address" "InfoAddress" 
-      genFilterButtons "Enter constructor name" "ConstrName"
+      genFilterButtonsWithS cons "Enter constructor name" "ConstrName"
       genFilterButtons "Enter closure name" "ClosureName"
       genFilterButtons "Enter closure size (B)" "ClosureSize"
-      genFilterButtons "Enter closure type" "ClosureType"
+      genFilterButtonsWithS cloTypes "Enter closure type" "ClosureType"
       genFilterButtonsNoExclude "Enter ARR_WORDS size (B)" "ARR_WORDSSize"
       if inEraMode dbgVersion then genFilterButtons "Enter era" "Era" else mempty
       if inSomeProfMode dbgVersion then genFilterButtons "Enter cost centre id" "CCID" else mempty
@@ -1674,14 +1675,24 @@ renderModifyFilterPage filters' dbgVersion = renderText $ do
         button_ [type_ "submit"] "Clear all filters"    
 
 genFilterButtons :: String -> String -> Html ()
-genFilterButtons = genFilterButtons' True
+genFilterButtons = genFilterButtons' Nothing True
 genFilterButtonsNoExclude :: String -> String -> Html ()
-genFilterButtonsNoExclude = genFilterButtons' False
-genFilterButtons' :: Bool -> String -> String -> Html ()
-genFilterButtons' exclude flavourText filterType = do
+genFilterButtonsNoExclude = genFilterButtons' Nothing False
+genFilterButtonsWithS :: [String] -> String -> String -> Html ()
+genFilterButtonsWithS suggs = genFilterButtons' (Just suggs) True
+genFilterButtons' :: Maybe [String] -> Bool -> String -> String -> Html ()
+genFilterButtons' suggs exclude flavourText filterType = do
+ let suggsId = pack $ "suggs" ++ filterType
  form_ [ method_ "post", action_ "/addFilter"
        , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-     input_ [type_ "text", name_ "pattern", placeholder_ (pack flavourText), required_ "required"]
+     input_ ([type_ "text", name_ "pattern", placeholder_ (pack flavourText)
+            , required_ "required"]
+            ++ (case suggs of Nothing -> []; Just _ -> [list_ suggsId]))
+     case suggs of
+       Nothing -> mempty
+       Just suggs' -> do
+         datalist_ [id_ suggsId] $ F.forM_ suggs' $ \s -> option_ [value_ (pack s)] (toHtml s)
+
      input_ [type_ "hidden", name_ "filterType", value_ (pack filterType)]
      button_ [type_ "submit", name_ "invert", value_ "False"] "Add filter"
      if exclude then button_ [type_ "submit", name_ "invert", value_ "True"] "Exclude" else mempty
@@ -2146,6 +2157,7 @@ handleConnect appStateRef state formValue options isValid' connect = do
 
 getNodeName :: IOTreeNode ClosureDetails name -> String
 getNodeName (IOTreeNode n _) = closureName n
+closureName :: ClosureDetails -> String
 closureName (ClosureDetails c _ _) = closureShowAddress c 
 closureName (InfoDetails inf) = T.unpack (_labelInParent inf)
 closureName (LabelNode l) = T.unpack l
@@ -2174,8 +2186,10 @@ handleModifyFilters :: IORef AppState -> ActionT IO ()
 handleModifyFilters appStateRef = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
-    Connected _ _ (PausedMode os) ->
-      Scotty.html $ renderModifyFilterPage (_filters os) (_version os)
+    Connected _ debuggee' (PausedMode os) -> do
+      let mClosFilter = uiFiltersToFilter (_filters os)
+      cons <- getSuggestions mClosFilter debuggee'
+      Scotty.html $ renderModifyFilterPage cons (_filters os) (_version os)
     _ -> Scotty.redirect "/"
 
 
@@ -2202,6 +2216,21 @@ updateAppState os f socket debuggee' state = newAppState
 
 setTM :: TreeMode -> OperationalState -> OperationalState
 setTM treeMode' os = os { _treeMode = treeMode' }
+
+--getSuggestions :: MonadIO m => GHC.Debug.Client.Monad.DebugM ClosureFilter 
+--                            -> Debuggee -> m ([String], [String])
+getSuggestions mClosFilter debuggee' = do 
+  forSearch <- liftIO $ retainersOf Nothing mClosFilter Nothing debuggee'
+  let f clos = case clos of
+                 Debug.ConstrClosure{} -> Just $ dereferenceConDesc (Debug.constrDesc clos)
+                 _ -> Nothing
+  let g clos = tipe $ Debug.decodedTable $ Debug.info $ Debug.unDCS $ _closureSized clos
+  let conDescs = map (map (f . Debug.unDCS . _closureSized)) forSearch
+  let cloTypes = List.sort $ List.nub $ concat $ map (map g) forSearch
+  conDescs' <- liftIO $ mapM (run debuggee') (concatMap catMaybes conDescs)
+  let cons = List.sort $ List.nub [ name x 
+                                  | x <- conDescs', pkg x `notElem` (["","ghc-prim","base"] :: [String])]
+  return $ (cons, map show cloTypes)
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
