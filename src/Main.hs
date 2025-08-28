@@ -41,6 +41,12 @@ import Data.Colour (Colour)
 import Data.Colour.SRGB (toSRGB, channelRed, channelGreen, channelBlue)
 import qualified Data.ByteString.Lazy as BL
 import Graphics.Text.TrueType (loadFontFile, Font)
+import GHC.RTS.Events (readEventLogFromFile)
+import Network.Wai.Parse (FileInfo(..))
+import Eventlog.Data (generateJsonValidate, HeapProfileData(..), eventlogHeapProfile, generateJson)
+import Eventlog.HtmlTemplate (templateString)
+import qualified Eventlog.Args as EA
+import Data.Aeson (encode)
 
 import Brick
 import Brick.BChan
@@ -1328,6 +1334,27 @@ renderSocketSelectionPage st sockets =
                  toHtml $ socketName socket <> " - " <> renderSocketTime socket
              button_ "Connect"
 
+    h3_ $ "Upload eventlog"
+    li_ $ "Compile with the -prof flag, or use cabal run --enable-profiling"
+    li_ $ "Run the executable with the -l or -l-agu to produce a .eventlog file"
+    li_ $ "Once the program has terminated, upload the eventlog to see analysis"
+    li_ $ "Note: .hp files are also accepted, but produce less detailed output"
+    form_ [method_ "post", enctype_ "multipart/form-data", action_ "/eventlogAnalysis"] $ do
+      div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start; margin-bottom: 0.25rem;" ] $ do
+        -- Left column: Upload file
+        div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
+          input_ [type_ "file", name_ "eventlog"]
+          button_ [type_ "submit"] "Upload"
+        
+        -- Right column: Analysis buttons
+        div_ [ style_ "flex: 1;" ] $ do
+          li_ $ do
+            input_ [type_ "radio", name_ "isJson", value_ "False", checked_]
+            toHtml ("See on web" :: String)
+          li_ $ do
+            input_ [type_ "radio", name_ "isJson", value_ "True"]
+            toHtml ("Create json" :: String)
+
 renderAlreadyConnectedPage :: TL.Text
 renderAlreadyConnectedPage =
   renderText $ do
@@ -1356,6 +1383,9 @@ renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' o
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
+
+    
+  
 
     div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start; margin-bottom: 0.25rem;" ] $ do
       -- Left column: Summary and stop/start buttons
@@ -1899,6 +1929,8 @@ indexParam :: Data.String.IsString t => ParamGet t Int
 indexParam getParam = readParam "index" getParam read (-1)
 searchLimitParam :: Data.String.IsString t => ParamGet t (Maybe Int)
 searchLimitParam getParam = readParam "index" getParam readMaybe Nothing
+eLogOutParam :: Data.String.IsString t => ParamGet t Bool
+eLogOutParam getParam = readParam "isJson" getParam (maybe False id . readMaybe) False
 
 
 buildClosureGraph :: [String] -> [(String, String)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
@@ -2206,6 +2238,47 @@ app appStateRef = do
           Snapshot -> Scotty.html $ renderSocketSelectionPage st snapshotList
       Connected {} -> do
         Scotty.html $ renderAlreadyConnectedPage
+  {- Pass eventlog to eventlog2html -}
+  Scotty.post "/eventlogAnalysis" $ do
+    file <- Scotty.files
+    isJson <- eLogOutParam Scotty.formParam
+    case lookup "eventlog" file of
+      Just f -> do
+        let path = "tmp/prog.eventlog"
+            suffix = init $ last $ splitOn "." $ show $ fileName f
+            isHeapProfile = if suffix == "hp" then True else False
+        liftIO $ BS.writeFile path (fileContent f)
+        let checkTraces _ = return ()
+            args = EA.Args 
+              { sorting = EA.Size
+              , reversing = False
+              , nBands = 15
+              , detailedLimit = Nothing
+              , heapProfile = isHeapProfile
+              , noIncludejs = False
+              , json = isJson
+              , noTraces = False
+              , traceEvents = False
+              , userColourScheme = "category20b"
+              , fixedYAxis = Nothing
+              , includeStr = []
+              , excludeStr = []
+              , outputFile = Nothing
+              , files = [path] 
+              }
+        if not isJson then do
+          prof_type <- liftIO $ generateJsonValidate checkTraces path args
+          let htmlStr = templateString prof_type args
+          Scotty.html $ TL.pack htmlStr 
+        else do
+          Just (HeapProfileData val _ _) <- eventlogHeapProfile <$> liftIO (generateJson path args)
+          let payload = encode val
+          Scotty.setHeader "Content-Type" "application/json"
+          Scotty.setHeader "Content-Disposition" "attachment; filename=\"eventlog.json\""
+          Scotty.raw payload
+
+          
+      Nothing -> Scotty.text "No file uploaded"
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
