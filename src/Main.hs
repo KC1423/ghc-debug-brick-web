@@ -46,7 +46,7 @@ import Eventlog.Data (generateJsonValidate, HeapProfileData(..), eventlogHeapPro
 import Eventlog.HtmlTemplate (templateString)
 import qualified Eventlog.Args as EA
 import Data.Aeson (encode)
-import GHC.Debug.Client.Query (dereferenceConDesc)
+import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC)
 import Data.Maybe (catMaybes)
 
 import Brick
@@ -1643,8 +1643,8 @@ renderFilterSearchPage tree filters' selectedPath mInc = renderText $ do
   renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
   autoScrollScript
 
-renderModifyFilterPage :: ([String], [String]) -> [UIFilter] -> Version -> TL.Text
-renderModifyFilterPage (cons, cloTypes) filters' dbgVersion = renderText $ do  
+renderModifyFilterPage :: Suggestions -> [UIFilter] -> Version -> TL.Text
+renderModifyFilterPage Suggestions{..} filters' dbgVersion = renderText $ do  
   h1_ "Modify filters"
    
   div_ $ form_ [method_ "post", action_ "/searchWithFilters", style_ "display:inline"] $
@@ -1663,13 +1663,14 @@ renderModifyFilterPage (cons, cloTypes) filters' dbgVersion = renderText $ do
     div_ [ style_ "flex: 1;" ] $ do
       genFilterButtons "Enter closure address" "Address" 
       genFilterButtons "Enter info table address" "InfoAddress" 
-      genFilterButtonsWithS cons "Enter constructor name" "ConstrName"
+      genFilterButtonsWithS _cons "Enter constructor name" "ConstrName"
       genFilterButtons "Enter closure name" "ClosureName"
       genFilterButtons "Enter closure size (B)" "ClosureSize"
-      genFilterButtonsWithS cloTypes "Enter closure type" "ClosureType"
+      genFilterButtonsWithS _cloTypes "Enter closure type" "ClosureType"
       genFilterButtonsNoExclude "Enter ARR_WORDS size (B)" "ARR_WORDSSize"
       if inEraMode dbgVersion then genFilterButtons "Enter era" "Era" else mempty
-      if inSomeProfMode dbgVersion then genFilterButtons "Enter cost centre id" "CCID" else mempty
+      if inSomeProfMode dbgVersion then genFilterButtonsWithS _ccIds "Enter cost centre id" "CCID"
+                                   else mempty
       form_ [ method_ "post", action_ "/clearFilters"
             , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
         button_ [type_ "submit"] "Clear all filters"    
@@ -2217,20 +2218,44 @@ updateAppState os f socket debuggee' state = newAppState
 setTM :: TreeMode -> OperationalState -> OperationalState
 setTM treeMode' os = os { _treeMode = treeMode' }
 
+
+data Suggestions = Suggestions 
+  { _cons :: [String]
+  , _cloTypes :: [String]
+  , _ccIds :: [String]
+  }
+
+getConstructors debuggee' forSearch = do 
+  let f clos = case clos of
+                 Debug.ConstrClosure{} -> Just $ dereferenceConDesc (Debug.constrDesc clos)
+                 _ -> Nothing
+  let conDescs = map (map (f . Debug.unDCS . _closureSized)) forSearch
+  conDescs' <- liftIO $ mapM (run debuggee') (concatMap catMaybes conDescs)
+  let cons = [ name x | x <- conDescs', pkg x `notElem` (["","ghc-prim","base"] :: [String]) ]
+  return $ List.sort $ List.nub cons
+
+getClosureTypes forSearch = do
+  let g clos = tipe $ Debug.decodedTable $ Debug.info $ Debug.unDCS $ _closureSized clos
+  let cloTypes = List.sort $ List.nub $ concat $ map (map g) forSearch
+  return (map show cloTypes)
+
+getCcIds debuggee' forSearch = do
+  let h clos = Debug.profHeader $ Debug.unDCS $ _closureSized clos
+  let ccsIds = map (dereferenceCCS . Debug.ccs) $ catMaybes $ concatMap (map h) forSearch
+  ccsIds' <- liftIO $ mapM (run debuggee') ccsIds
+  let ccsIds'' = List.nub $ map Debug.ccsCc ccsIds'
+  ccIds <- liftIO $ mapM (run debuggee') (map dereferenceCC ccsIds'')
+  let ccIds' = List.sort $ List.nub $ map Debug.ccID ccIds
+  return (map show ccIds')
+
 --getSuggestions :: MonadIO m => GHC.Debug.Client.Monad.DebugM ClosureFilter 
 --                            -> Debuggee -> m ([String], [String])
 getSuggestions mClosFilter debuggee' = do 
   forSearch <- liftIO $ retainersOf Nothing mClosFilter Nothing debuggee'
-  let f clos = case clos of
-                 Debug.ConstrClosure{} -> Just $ dereferenceConDesc (Debug.constrDesc clos)
-                 _ -> Nothing
-  let g clos = tipe $ Debug.decodedTable $ Debug.info $ Debug.unDCS $ _closureSized clos
-  let conDescs = map (map (f . Debug.unDCS . _closureSized)) forSearch
-  let cloTypes = List.sort $ List.nub $ concat $ map (map g) forSearch
-  conDescs' <- liftIO $ mapM (run debuggee') (concatMap catMaybes conDescs)
-  let cons = List.sort $ List.nub [ name x 
-                                  | x <- conDescs', pkg x `notElem` (["","ghc-prim","base"] :: [String])]
-  return $ (cons, map show cloTypes)
+  constrs <- getConstructors debuggee' forSearch
+  cloTypes <- getClosureTypes forSearch
+  ccIds <- getCcIds debuggee' forSearch
+  return $ Suggestions constrs cloTypes ccIds
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -2249,6 +2274,7 @@ app appStateRef = do
         Scotty.file filePath
       else
         Scotty.text "Profile dump not found."
+  {- Serves the ARR_WORDS histogram -}
   Scotty.get "/histogram" $ do
     Scotty.setHeader "Content-Type" "image/png"
     Scotty.file "tmp/histo.png"
