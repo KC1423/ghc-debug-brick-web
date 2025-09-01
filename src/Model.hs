@@ -48,13 +48,11 @@ import GHC.Debug.CostCentres (findAllChildrenOfCC)
 import qualified GHC.Debug.Types as GD
 import qualified GHC.Debug.Types.Version as GD
 
-
 data Event
   = PollTick  -- Used to perform arbitrary polling based tasks e.g. looking for new debuggees
   | ProgressMessage Text
   | ProgressFinished Text NominalDiffTime
   | AsyncFinished (EventM Name OperationalState ())
-
 
 initialAppState :: BChan Event -> AppState
 initialAppState event = AppState
@@ -158,20 +156,9 @@ data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
               | forall a . Searched (a -> Widget Name) (IOTree a Name)
               | forall a . SearchedHtml (Utils a) (IOTree a Name) String
 
-
-treeLength :: TreeMode -> Maybe Int
-treeLength (SavedAndGCRoots {}) = Nothing
-treeLength (Retainer _ tree) = Just $ Prelude.length $ getIOTreeRoots tree
-treeLength (Searched _ tree) = Just $ Prelude.length $ getIOTreeRoots tree
-treeLength (SearchedHtml _ tree _) = Just $ Prelude.length $ getIOTreeRoots tree
-
 data FooterMode = FooterInfo
                 | FooterMessage Text
                 | FooterInput FooterInputMode (Form Text () Name)
-
-isFocusedFooter :: FooterMode -> Bool
-isFocusedFooter (FooterInput {}) = True
-isFocusedFooter _ = False
 
 data FooterInputMode = FClosureAddress {runNow :: Bool, invert :: Bool}
                      | FInfoTableAddress {runNow :: Bool, invert :: Bool}
@@ -204,65 +191,15 @@ data Command = Command { commandDescription :: Text
                        -- has era profiling enabled.
                        }
 
-mkCommand :: Text -> Vty.Event -> EventM Name OperationalState () -> Command
-mkCommand desc ev dispatch = Command desc (Just ev) (\_ -> dispatch) NoReq
-
-mkCommand' :: Text -> EventM Name OperationalState () -> Command
-mkCommand' desc dispatch = Command desc Nothing (\_ -> dispatch) NoReq
-
-mkFilterCmd :: Text -> Vty.Event -> EventM Name OperationalState () -> ProfilingReq -> Command
-mkFilterCmd desc ev dispatch profMode = Command desc (Just ev) (\_ -> dispatch) profMode
-
-mkFilterCmd' :: Text -> EventM Name OperationalState () -> ProfilingReq -> Command
-mkFilterCmd' desc dispatch profMode = Command desc Nothing (\_ -> dispatch) profMode
-
-isCmdEnabled :: GD.Version -> Command -> Bool
-isCmdEnabled debuggeeVersion cmd = case commandRequiresProfMode cmd of
-  NoReq -> True
-  ReqErasProfiling ->
-    Just GD.EraProfiling == GD.v_profiling debuggeeVersion
-  ReqSomeProfiling ->
-    GD.isProfiledRTS debuggeeVersion
-
 inEraMode :: GD.Version -> Bool
 inEraMode ver = Just GD.EraProfiling == GD.v_profiling ver
 inSomeProfMode :: GD.Version -> Bool
 inSomeProfMode ver = GD.isProfiledRTS ver
 
-isCmdDisabled :: GD.Version -> Command -> Bool
-isCmdDisabled v cmd = not $ isCmdEnabled v cmd
-
 data OverlayMode = KeybindingsShown
                  -- TODO: Abstract the "CommandPicker" into it's own module
                  | CommandPicker (Form Text () Name) (GenericList Name Seq Command) (Seq Command)
                  | NoOverlay
-
-
-invertInput :: FooterInputMode -> FooterInputMode
-invertInput x@FClosureAddress{invert} = x{invert = not invert}
-invertInput x@FInfoTableAddress{invert} = x{invert = not invert}
-invertInput x@FConstructorName{invert} = x{invert = not invert}
-invertInput x@FClosureName{invert} = x{invert = not invert}
-invertInput x@FFilterEras{invert} = x{invert = not invert}
-invertInput x@FFilterClosureSize{invert} = x{invert = not invert}
-invertInput x@FFilterClosureType{invert} = x{invert = not invert}
-invertInput x@FFilterCcId{invert} = x{invert = not invert}
-invertInput x = x
-
-formatFooterMode :: FooterInputMode -> Text
-formatFooterMode FClosureAddress{invert} = (if invert then "!" else "") <> "address (0x..): "
-formatFooterMode FInfoTableAddress{invert} = (if invert then "!" else "") <> "info table pointer (0x..): "
-formatFooterMode FConstructorName{invert} = (if invert then "!" else "") <> "constructor name: "
-formatFooterMode FClosureName{invert} = (if invert then "!" else "") <> "closure name: "
-formatFooterMode FFilterEras{invert} = (if invert then "!" else "") <> "era range (<era>/<start-era>-<end-era>): "
-formatFooterMode FFilterClosureSize{invert} = (if invert then "!" else "") <> "closure size (bytes): "
-formatFooterMode FFilterClosureType{invert} = (if invert then "!" else "") <> "closure type: "
-formatFooterMode FFilterCcId{invert} = (if invert then "!" else "") <> "CC Id: "
-formatFooterMode FArrWordsSize = "size (bytes)>= "
-formatFooterMode FDumpArrWords = "dump payload to file: "
-formatFooterMode FSetResultSize = "search result limit (0 for infinity): "
-formatFooterMode FSnapshot = "snapshot name: "
-formatFooterMode (FProfile {}) = "filename: "
 
 data ConnectedMode
   -- | Debuggee is running
@@ -355,9 +292,6 @@ showEraRange (EraRange s e)
     go n
       | n == maxBound = "∞)"
       | otherwise = show n ++ "]"
-
-osSize :: OperationalState -> Int
-osSize os = fromMaybe (Prelude.length (getIOTreeRoots $ _treeSavedAndGCRoots os)) $ treeLength (_treeMode os)
 
 pauseModeTree :: (forall a . (a -> Widget Name) -> IOTree a Name -> r) -> OperationalState -> r
 pauseModeTree k (OperationalState _ _ mode _kb _footer _from roots _ _ _ _) = case mode of
