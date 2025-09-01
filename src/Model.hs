@@ -48,25 +48,17 @@ import GHC.Debug.CostCentres (findAllChildrenOfCC)
 import qualified GHC.Debug.Types as GD
 import qualified GHC.Debug.Types.Version as GD
 
-data Event
-  = PollTick  -- Used to perform arbitrary polling based tasks e.g. looking for new debuggees
-  | ProgressMessage Text
-  | ProgressFinished Text NominalDiffTime
-  | AsyncFinished (EventM Name OperationalState ())
-
-initialAppState :: BChan Event -> AppState
-initialAppState event = AppState
+initialAppState :: AppState
+initialAppState = AppState
   { _majorState = Setup
       { _setupKind = Socket
       , _knownDebuggees = list Setup_KnownDebuggeesList [] 1
       , _knownSnapshots = list Setup_KnownSnapshotsList [] 1
-      },
-    _appChan = event
+      }
   }
 
 data AppState = AppState
   { _majorState :: MajorState
-  , _appChan    :: BChan Event
   }
 
 mkSocketInfo :: FilePath -> IO SocketInfo
@@ -156,50 +148,16 @@ data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
               | forall a . Searched (a -> Widget Name) (IOTree a Name)
               | forall a . SearchedHtml (Utils a) (IOTree a Name) String
 
-data FooterMode = FooterInfo
-                | FooterMessage Text
-                | FooterInput FooterInputMode (Form Text () Name)
-
-data FooterInputMode = FClosureAddress {runNow :: Bool, invert :: Bool}
-                     | FInfoTableAddress {runNow :: Bool, invert :: Bool}
-                     | FConstructorName {runNow :: Bool, invert :: Bool}
-                     | FClosureName {runNow :: Bool, invert :: Bool}
-                     | FArrWordsSize
-                     | FFilterEras {runNow :: Bool, invert :: Bool}
-                     | FFilterClosureType {invert :: Bool}
-                     | FFilterClosureSize {invert :: Bool}
-                     | FFilterCcId {runNow :: Bool, invert :: Bool}
-                     | FProfile ProfileLevel
-                     | FSnapshot
-                     | FDumpArrWords
-                     | FSetResultSize
-                     deriving Show
-
 -- | Profiling requirement for a command
 data ProfilingReq
   = ReqSomeProfiling
   | ReqErasProfiling
   | NoReq
 
-data Command = Command { commandDescription :: Text
-                       , commandKey :: Maybe Vty.Event
-                       , dispatchCommand :: Debuggee -> EventM Name OperationalState ()
-                       , commandRequiresProfMode :: ProfilingReq
-                       -- ^ The command requires that the debuggee is in a specific
-                       -- profiling mode.
-                       -- For example, we can only filter by eras if the program
-                       -- has era profiling enabled.
-                       }
-
 inEraMode :: GD.Version -> Bool
 inEraMode ver = Just GD.EraProfiling == GD.v_profiling ver
 inSomeProfMode :: GD.Version -> Bool
 inSomeProfMode ver = GD.isProfiledRTS ver
-
-data OverlayMode = KeybindingsShown
-                 -- TODO: Abstract the "CommandPicker" into it's own module
-                 | CommandPicker (Form Text () Name) (GenericList Name Seq Command) (Seq Command)
-                 | NoOverlay
 
 data ConnectedMode
   -- | Debuggee is running
@@ -210,21 +168,15 @@ data ConnectedMode
 data RootsOrigin = DefaultRoots [(Text, Ptr)]
                  | SearchedRoots [(Text, Ptr)]
 
-
 currentRoots :: RootsOrigin -> [(Text, Ptr)]
 currentRoots (DefaultRoots cp) = cp
 currentRoots (SearchedRoots cp) = cp
 
 data OperationalState = OperationalState
-    { _running_task :: Maybe ThreadId
-    , _last_run_time :: Maybe (Text, NominalDiffTime)
-    , _treeMode :: TreeMode
-    , _keybindingsMode :: OverlayMode
-    , _footerMode :: FooterMode
+    { _treeMode :: TreeMode
     , _rootsFrom  :: RootsOrigin
     , _treeSavedAndGCRoots :: IOTree (ClosureDetails) Name
     -- ^ Tree corresponding to SavedAndGCRoots mode
-    , _event_chan :: BChan Event
     , _resultSize :: Maybe Int
     , _filters :: [UIFilter]
     , _version :: GD.Version
@@ -294,7 +246,7 @@ showEraRange (EraRange s e)
       | otherwise = show n ++ "]"
 
 pauseModeTree :: (forall a . (a -> Widget Name) -> IOTree a Name -> r) -> OperationalState -> r
-pauseModeTree k (OperationalState _ _ mode _kb _footer _from roots _ _ _ _) = case mode of
+pauseModeTree k (OperationalState mode _from roots _ _ _) = case mode of
   SavedAndGCRoots render -> k render roots
   Retainer render r -> k render r
   Searched render r -> k render r
@@ -306,4 +258,3 @@ makeLenses ''ClosureDetails
 makeLenses ''ConnectedMode
 makeLenses ''OperationalState
 makeLenses ''SocketInfo
-makeLenses ''OverlayMode

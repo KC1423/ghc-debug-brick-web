@@ -1127,7 +1127,7 @@ handleConnect appStateRef state formValue options isValid' connect = do
       valid <- liftIO $ isValid' socketLike
       if valid
         then do
-          debuggee' <- liftIO $ connect (writeBChan (_appChan state) . ProgressMessage)
+          debuggee' <- liftIO $ connect (\_->return ())--(writeBChan (_appChan state) . ProgressMessage)
                                  (_socketLocation socketLike)
           let newState = state & majorState .~ Connected
                       { _debuggeeSocket = socketLike
@@ -1384,14 +1384,11 @@ app appStateRef = do
         ver <- liftIO $ GD.version debuggee'
         (rootsTree, initRoots) <- liftIO $ mkSavedAndGCRootsIOTree debuggee'
         let pausedState = PausedMode $
-                            OperationalState Nothing
-                              Nothing
+                            OperationalState --Nothing
+                              --Nothing
                               savedAndGCRoots
-                              NoOverlay
-                              FooterInfo
                               (DefaultRoots initRoots)
                               rootsTree
-                              (_appChan state)
                               (Just 100)
                               []
                               ver 
@@ -1414,18 +1411,10 @@ app appStateRef = do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected _ debuggee' (PausedMode os) -> do
-        case view running_task os of
-          Just tid -> do
-            liftIO $ killThread tid
-            let newAppState = state & majorState . mode . pausedMode . running_task .~ Nothing
-                                    -- & majorState . mode . pausedMode %~ resetFooter
-            liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect "/connect" 
-          Nothing -> do
-            liftIO $ resume debuggee'
-            let newAppState = initialAppState (_appChan state)
-            liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect "/"
+        liftIO $ resume debuggee'
+        let newAppState = initialAppState
+        liftIO $ writeIORef appStateRef newAppState
+        Scotty.redirect "/"
       _ -> Scotty.redirect "/"
   {- Toggles the expansion state of a path in the tree -}
   Scotty.post "/toggle" $ do
@@ -1737,7 +1726,6 @@ app appStateRef = do
 
 main :: IO ()
 main = do
-  eventChan <- newBChan 10
-  let initial = initialAppState eventChan
+  let initial = initialAppState
   appStateRef <- newIORef initial
   Scotty.scotty 3000 (app appStateRef)
