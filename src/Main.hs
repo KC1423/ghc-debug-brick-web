@@ -46,7 +46,7 @@ import Eventlog.Data (generateJsonValidate, HeapProfileData(..), eventlogHeapPro
 import Eventlog.HtmlTemplate (templateString)
 import qualified Eventlog.Args as EA
 import Data.Aeson (encode)
-import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC)
+import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC, getSourceInfo)
 import Data.Maybe (catMaybes)
 
 import Brick
@@ -1663,13 +1663,13 @@ renderModifyFilterPage Suggestions{..} filters' dbgVersion = renderText $ do
     div_ [ style_ "flex: 1;" ] $ do
       genFilterButtons "Enter closure address" "Address" 
       genFilterButtons "Enter info table address" "InfoAddress" 
-      genFilterButtonsWithS _cons "Enter constructor name" "ConstrName"
-      genFilterButtons "Enter closure name" "ClosureName"
+      genFilterButtonsWithS _cons "Select constructor name" "ConstrName"
+      genFilterButtonsWithS _cloNames "Select closure name" "ClosureName"
       genFilterButtons "Enter closure size (B)" "ClosureSize"
-      genFilterButtonsWithS _cloTypes "Enter closure type" "ClosureType"
+      genFilterButtonsWithS _cloTypes "Select closure type" "ClosureType"
       genFilterButtonsNoExclude "Enter ARR_WORDS size (B)" "ARR_WORDSSize"
       if inEraMode dbgVersion then genFilterButtons "Enter era" "Era" else mempty
-      if inSomeProfMode dbgVersion then genFilterButtonsWithS _ccIds "Enter cost centre id" "CCID"
+      if inSomeProfMode dbgVersion then genFilterButtonsWithS _ccIds "Select cost centre id" "CCID"
                                    else mempty
       form_ [ method_ "post", action_ "/clearFilters"
             , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
@@ -1683,22 +1683,59 @@ genFilterButtonsWithS :: [String] -> String -> String -> Html ()
 genFilterButtonsWithS suggs = genFilterButtons' (Just suggs) True
 genFilterButtons' :: Maybe [String] -> Bool -> String -> String -> Html ()
 genFilterButtons' suggs exclude flavourText filterType = do
- let suggsId = pack $ "suggs" ++ filterType
- form_ [ method_ "post", action_ "/addFilter"
-       , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-     input_ ([type_ "text", name_ "pattern", placeholder_ (pack flavourText)
-            , required_ "required"]
-            ++ (case suggs of Nothing -> []; Just _ -> [list_ suggsId]))
-     case suggs of
-       Nothing -> mempty
-       Just suggs' -> do
-         datalist_ [id_ suggsId] $ F.forM_ suggs' $ \s -> option_ [value_ (pack s)] (toHtml s)
+  let selectId    = pack $ "select-" ++ filterType
+      inputId     = pack $ "input-" ++ filterType
+      containerId = pack $ "container-" ++ filterType
 
-     input_ [type_ "hidden", name_ "filterType", value_ (pack filterType)]
-     button_ [type_ "submit", name_ "invert", value_ "False"] "Add filter"
-     if exclude then button_ [type_ "submit", name_ "invert", value_ "True"] "Exclude" else mempty
+  form_ [ method_ "post", action_ "/addFilter"
+        , style_ "margin: 0; display: flex; align-items: flex-start; gap: 8px;"
+        , id_ containerId ] $ do
 
-        
+    -- Container for select + optional input
+    div_ [ style_ "display: flex; flex-direction: column; gap: 4px;" ] $ do
+      let lenStyle = style_ "width: 24ch; margin: 0;"
+      case suggs of
+        Just suggs' -> do
+          select_ [name_ "pattern", id_ selectId, onchange_ (pack $
+                  "handleSelectChange('" ++ T.unpack selectId ++ "', '" ++ T.unpack inputId ++ "')"),
+                  required_ "required", lenStyle] $ do
+            option_ [disabled_ "disabled", selected_ "selected", hidden_ "hidden"] (toHtml flavourText)
+            F.forM_ suggs' $ \s ->
+              option_ [value_ (pack s)] (toHtml s)
+            option_ [value_ "__other__"] "Other..."
+
+          -- Hidden text input underneath
+          input_ [ type_ "text", name_ "pattern", id_ inputId
+                 , placeholder_ "Enter custom value"
+                 , style_ "display: none;" ]
+
+        Nothing -> input_ [ type_ "text", name_ "pattern", placeholder_ (pack flavourText)
+                          , required_ "required", lenStyle ]
+
+    input_ [type_ "hidden", name_ "filterType", value_ (pack filterType)]
+    button_ [type_ "submit", name_ "invert", value_ "False"] "Add filter"
+    if exclude then button_ [type_ "submit", name_ "invert", value_ "True"] "Exclude" else mempty
+
+    -- JS to toggle input visibility
+    script_ $ pack $
+      "function handleSelectChange(selectId, inputId) {\n\
+      \  var select = document.getElementById(selectId);\n\
+      \  var input = document.getElementById(inputId);\n\
+      \  if (select && input) {\n\
+      \    if (select.value === '__other__') {\n\
+      \      input.style.display = 'inline-block';\n\
+      \      input.required = true;\n\
+      \      select.name = '';\n\
+      \      input.name = 'pattern';\n\
+      \    } else {\n\
+      \      input.style.display = 'none';\n\
+      \      input.required = false;\n\
+      \      input.name = '';\n\
+      \      select.name = 'pattern';\n\
+      \    }\n\
+      \  }\n\
+      \}"
+
         
 detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
 detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
@@ -1899,9 +1936,10 @@ parseProfileLevel "1" = OneLevel
 parseProfileLevel "2" = TwoLevel  
 parseProfileLevel _ = error "Error: profile level not supported"
 
+truncN :: Int -> String -> String
+truncN n s = take n s ++ (if length s > n then "..." else "")
 trunc :: String -> String
-trunc s = take n s ++ (if length s > n then "..." else "")
-  where n = 30
+trunc = truncN 30
 truncT :: Text -> Text
 truncT = pack . trunc . T.unpack
 
@@ -2170,7 +2208,7 @@ handleImg :: IOTree a name -> (IOTreeNode a name -> String) -> (a -> String) -> 
 handleImg tree nodeName getName' pageName format' selectedPath = do
   case getSubTree tree selectedPath of
     Just subtree -> do
-      (expSubtree, capped) <- liftIO $ expandNodeSafe subtree format'
+      (expSubtree, capped) <- liftIO $ expandNodeSafe subtree getName'
       let name = nodeName subtree
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
@@ -2189,8 +2227,8 @@ handleModifyFilters appStateRef = do
   case state ^. majorState of
     Connected _ debuggee' (PausedMode os) -> do
       let mClosFilter = uiFiltersToFilter (_filters os)
-      cons <- getSuggestions mClosFilter debuggee'
-      Scotty.html $ renderModifyFilterPage cons (_filters os) (_version os)
+      suggs <- getSuggestions mClosFilter debuggee'
+      Scotty.html $ renderModifyFilterPage suggs (_filters os) (_version os)
     _ -> Scotty.redirect "/"
 
 
@@ -2221,27 +2259,42 @@ setTM treeMode' os = os { _treeMode = treeMode' }
 
 data Suggestions = Suggestions 
   { _cons :: [String]
+  , _cloNames :: [String]
   , _cloTypes :: [String]
   , _ccIds :: [String]
   }
 
+getConstructors :: MonadIO m => Debuggee
+                -> [[DebugClosure ccs srt pap ConstrDescCont s b]] -> m [String]
 getConstructors debuggee' forSearch = do 
   let f clos = case clos of
                  Debug.ConstrClosure{} -> Just $ dereferenceConDesc (Debug.constrDesc clos)
                  _ -> Nothing
   let conDescs = map (map (f . Debug.unDCS . _closureSized)) forSearch
   conDescs' <- liftIO $ mapM (run debuggee') (concatMap catMaybes conDescs)
-  let cons = [ name x | x <- conDescs', pkg x `notElem` (["","ghc-prim","base"] :: [String]) ]
-  return $ List.sort $ List.nub cons
+  --let cons = [ name x | x <- conDescs', pkg x `notElem` (["",{-"ghc-prim",-}"base"] :: [String]) ]
+  return $ List.nub (map name conDescs')
 
+getClosureNames :: MonadIO m => Debuggee
+                -> [[DebugClosure ccs srt pap ConstrDescCont s b]] -> m [String]
+getClosureNames debuggee' forSearch = do
+  let f clos = Debug.tableId $ Debug.info $ Debug.unDCS $ _closureSized clos
+  let cloNames = List.sort $ List.nub $ concat $ map (map f) forSearch
+  cloNames' <- liftIO $ mapM (run debuggee') (map getSourceInfo cloNames)
+  return (map infoName $ catMaybes cloNames')
+
+getClosureTypes :: Monad m
+                => [[DebugClosure ccs srt pap string s b]] -> m [String]
 getClosureTypes forSearch = do
-  let g clos = tipe $ Debug.decodedTable $ Debug.info $ Debug.unDCS $ _closureSized clos
-  let cloTypes = List.sort $ List.nub $ concat $ map (map g) forSearch
+  let f clos = tipe $ Debug.decodedTable $ Debug.info $ Debug.unDCS $ _closureSized clos
+  let cloTypes = List.sort $ List.nub $ concat $ map (map f) forSearch
   return (map show cloTypes)
 
+getCcIds :: (Foldable t, MonadIO m)
+         => Debuggee -> t [DebugClosure CCSPtr srt pap string s b] -> m [String]
 getCcIds debuggee' forSearch = do
-  let h clos = Debug.profHeader $ Debug.unDCS $ _closureSized clos
-  let ccsIds = map (dereferenceCCS . Debug.ccs) $ catMaybes $ concatMap (map h) forSearch
+  let f clos = Debug.profHeader $ Debug.unDCS $ _closureSized clos
+  let ccsIds = map (dereferenceCCS . Debug.ccs) $ catMaybes $ concatMap (map f) forSearch
   ccsIds' <- liftIO $ mapM (run debuggee') ccsIds
   let ccsIds'' = List.nub $ map Debug.ccsCc ccsIds'
   ccIds <- liftIO $ mapM (run debuggee') (map dereferenceCC ccsIds'')
@@ -2249,13 +2302,14 @@ getCcIds debuggee' forSearch = do
   return (map show ccIds')
 
 --getSuggestions :: MonadIO m => GHC.Debug.Client.Monad.DebugM ClosureFilter 
---                            -> Debuggee -> m ([String], [String])
+--                            -> Debuggee -> m Suggestions
 getSuggestions mClosFilter debuggee' = do 
   forSearch <- liftIO $ retainersOf Nothing mClosFilter Nothing debuggee'
   constrs <- getConstructors debuggee' forSearch
+  cloNames <- getClosureNames debuggee' forSearch
   cloTypes <- getClosureTypes forSearch
   ccIds <- getCcIds debuggee' forSearch
-  return $ Suggestions constrs cloTypes ccIds
+  return $ Suggestions constrs cloNames cloTypes ccIds
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
