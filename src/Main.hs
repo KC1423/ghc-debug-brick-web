@@ -1370,13 +1370,58 @@ renderBadSocketPage =
     form_ [method_ "get", action_ "/"] $ do
       button_ "Select another socket"
 
+data Tab = Tab { tabName :: Text, tabRoute :: Text }
+
+tabs :: [Tab]
+tabs = 
+  [ Tab "Home" "/connect"
+  , Tab "Profile" "/profile"
+  , Tab "ARR_WORDS Count" "/arrWordsCount"
+  , Tab "Strings Count" "/stringsCount"
+  , Tab "Thunk Analysis" "/thunkAnalysis"
+  , Tab "Search with filters" "/searchWithFilters"
+  ]
+
+pageLayout :: Text -> Html () -> Html ()
+pageLayout currentRoute bodyContent = do
+  head_ $ do
+    title_ "BLAH"
+    style_ navStyle
+  body_ $ do
+    navBar currentRoute
+    div_ [class_ "content"] bodyContent
+
+navBar :: Text -> Html ()
+navBar current = nav_ [class_ "navbar"] $
+  ul_ $ F.forM_ tabs $ \ tab -> do
+    let active = if tabRoute tab == current then "active" else ""
+    li_ [class_ (T.unwords ["tab", active])] $
+      if tabRoute tab == "/profile"
+        then form_ [method_ "post", action_ "/profile", style_ "display:inline"] $ do
+               select_ [name_ "profileLevel", onchange_ "this.form.submit()"] $ do
+                 option_ [value_ "1"] (toHtml ("Level one" :: Text))
+                 option_ [value_ "2"] (toHtml ("Level two" :: Text))
+               button_ [type_ "submit", class_ "tab-button"] "Profile"
+        else form_ [method_ "post", action_ (tabRoute tab), style_ "display:inline"] $
+               button_ [type_ "submit", class_ "tab-button"] (toHtml (tabName tab))
+
+navStyle :: Text
+navStyle = T.unlines
+  [ ".navbar { background: #f0f0f0; padding: 10px; }"
+  , ".tab { display: inline; margin-right: 20px; }"
+  , ".tab-button { background: none; border: none; color: black; font-weight: bold; cursor: pointer; }"
+  , ".active .tab-button { color: blue; } "
+  , ".tab-button:focus { outline: none; }"
+  , ".content { margin-top: 20px }"
+  ]
+
 renderConnectedPage :: [Int] -> Maybe (Int, Bool) -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
 renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
       button_ "Pause process" 
-  PausedMode os -> do
+  PausedMode os -> pageLayout "/connect" $ do
     let tree = _treeSavedAndGCRoots os
 
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
@@ -1387,47 +1432,14 @@ renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' o
 
     
   
+    h3_ "Selection: "
+    detailedSummary renderClosureSummary tree selectedPath mInc
+    form_ [ method_ "post", action_ "/setSearchLimit"
+          , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+      input_ [type_ "text", name_ "index", placeholder_ "Enter search limit", required_ "required"]
 
-    div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start; margin-bottom: 0.25rem;" ] $ do
-      -- Left column: Summary and stop/start buttons
-      div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
-        detailedSummary renderClosureSummary tree selectedPath mInc
-        
-      -- Right column: Analysis buttons
-      div_ [ style_ "flex: 1;" ] $ do
-        div_ [ style_ "margin: 0; display: flex; flex-direction: column; gap: 0.25rem;" ] $ do
-          --div_ [style_ "position: absolute; top: 50px; right: 10px;"] $ do
-          form_ [ method_ "post", action_ "/profile"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] (toHtml ("View profile" :: Text))
-            select_ [name_ "profileLevel"] $ do
-              option_ [value_ "1"] (toHtml ("Level one" :: Text))
-              option_ [value_ "2"] (toHtml ("Level two" :: Text))
-          form_ [ method_ "post", action_ "/arrWordsCount"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "View ARR_WORDS count"
-          form_ [ method_ "post", action_ "/stringsCount"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "View strings count"
-          form_ [ method_ "post", action_ "/thunkAnalysis"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "View thunk analysis"
-          form_ [ method_ "post", action_ "/takeSnapshot"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot filename", required_ "required"]
-
-            input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-            button_ [type_ "submit"] "Take snapshot"
-          form_ [ method_ "post", action_ "/searchWithFilters"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "Search with current filters"
-          form_ [ method_ "post", action_ "/setSearchLimit"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            input_ [type_ "text", name_ "index", placeholder_ "Enter search limit", required_ "required"]
-
-            input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-            button_ [type_ "submit"] "Limit searches"
-
+      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+      button_ [type_ "submit"] "Limit searches"
 
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
@@ -1583,13 +1595,6 @@ renderImgPage returnTo name selectedPath capped svgContent =
         , "});"
         ]
       
-reconnectLink :: HtmlT Identity ()
-reconnectLink = do
-  div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
-    button_ [ type_ "submit"
-            , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
-            ] "Return to saved objects and GC roots"
-
 genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -> Html ())
                 -> (node -> [Int] -> Maybe (Int, Bool) -> Html ()) -> String -> Maybe (Int, Bool)
                 -> HtmlT Identity ()
@@ -1601,65 +1606,40 @@ genericTreeBody tree selectedPath renderRow renderSummary' name mInc = do
 
 renderProfilePage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
                   -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderProfilePage Utils{..} tree name selectedPath mInc = renderText $ do
+renderProfilePage Utils{..} tree name selectedPath mInc = renderText $ pageLayout "/profile" $ do
   h1_ "Profile"
-  reconnectLink
   div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
   genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
 
 renderCountPage :: (Show name, Ord name) => String -> Utils a -> IOTree a name -> String
                 -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderCountPage title Utils{..} tree name selectedPath mInc = renderText $ do
+renderCountPage title Utils{..} tree name selectedPath mInc = renderText $ pageLayout (T.pack $ "/" ++ name) $ do
   h1_ $ toHtml $ title ++ " Count"
-  reconnectLink
   genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
         
 renderThunkAnalysisPage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
                         -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderThunkAnalysisPage Utils{..} tree name selectedPath mInc = renderText $ do
+renderThunkAnalysisPage Utils{..} tree name selectedPath mInc = renderText $ pageLayout "/thunkAnalysis" $ do
   h1_ "Thunk analysis"
-  reconnectLink
   genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
   
 
-renderFilterSearchPage :: (Show name, Ord name) => IOTree ClosureDetails name -> [UIFilter] 
-                       -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderFilterSearchPage tree filters' selectedPath mInc = renderText $ do
+renderFilterSearchPage :: (Show name, Ord name) => IOTree ClosureDetails name -> Suggestions -> [UIFilter] 
+                       -> Version -> [Int] -> Maybe (Int, Bool) -> TL.Text
+renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath mInc = renderText $ pageLayout "/searchWithFilters" $ do
   h1_ "Results for search with filters"
-  reconnectLink
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
       h3_ "Selection: "
       ul_ $ detailedSummary renderClosureSummary tree selectedPath mInc
   
-    -- Right column: List of filters
+    -- Middle column: List of filters
     div_ [ style_ "flex: 1;" ] $ do
-      form_ [ method_ "post", action_ "/modifyFilters"
-            , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-        h3_ "Filters: "
-        button_ "Modify filters"
-      ul_ [style_ "margin-top: 0.25rem;"] $ plainUIFilters filters'
-  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
-  autoScrollScript
-
-renderModifyFilterPage :: Suggestions -> [UIFilter] -> Version -> TL.Text
-renderModifyFilterPage Suggestions{..} filters' dbgVersion = renderText $ do  
-  h1_ "Modify filters"
-   
-  div_ $ form_ [method_ "post", action_ "/searchWithFilters", style_ "display:inline"] $
-    button_ [ type_ "submit"
-            , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
-            ] "Return to search page"
-
-
-  div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
-    -- Left column: List of filters
-    div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
-      h3_ "Current filters: "
+      h3_ "Filters: "
       ul_ $ mapM_ (uncurry renderUIFilterHtml) (zip filters' [0..])
-    
-    -- Right column: Buttons to modify filters
+
+    -- Right column: Buttons for modifying filters
     div_ [ style_ "flex: 1;" ] $ do
       genFilterButtons "Enter closure address" "Address" 
       genFilterButtons "Enter info table address" "InfoAddress" 
@@ -1674,6 +1654,10 @@ renderModifyFilterPage Suggestions{..} filters' dbgVersion = renderText $ do
       form_ [ method_ "post", action_ "/clearFilters"
             , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
         button_ [type_ "submit"] "Clear all filters"    
+
+  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
+  autoScrollScript
+
 
 genFilterButtons :: String -> String -> Html ()
 genFilterButtons = genFilterButtons' Nothing True
@@ -1981,7 +1965,8 @@ searchLimitParam :: Data.String.IsString t => ParamGet t (Maybe Int)
 searchLimitParam getParam = readParam "index" getParam readMaybe Nothing
 eLogOutParam :: Data.String.IsString t => ParamGet t Bool
 eLogOutParam getParam = readParam "isJson" getParam (maybe False id . readMaybe) False
-
+filterChangedParam :: Data.String.IsString t => ParamGet t Bool
+filterChangedParam getParam = readParam "filterChanged" getParam (maybe False id . readMaybe) False
 
 buildClosureGraph :: [String] -> [(String, String)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
@@ -2138,14 +2123,31 @@ genericGet appStateRef index renderPage = do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected _ _ mode' ->
+      Connected socket debuggee' mode' ->
         case mode' of
           PausedMode os -> do 
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
-               Retainer _ tree -> do
-                 mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-                 Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
+               Retainer _ tree' -> do
+                 filterChanged <- filterChangedParam Scotty.queryParam
+                 if not filterChanged 
+                   then do
+                     let mClosFilter = uiFiltersToFilter (_filters os)
+                     mInc <- liftIO $ getIncSize closureGetName closureGetSize tree' selectedPath
+                     suggs <- getSuggestions mClosFilter debuggee'
+                     Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath mInc
+                   else do
+                     let mClosFilter = uiFiltersToFilter (_filters os)
+                     cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
+                     let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
+                     res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
+                     let tree = mkRetainerTree debuggee' res
+                     let newTM = Retainer renderClosureDetails tree
+                         newAppState = updateAppState os (setTM newTM) socket debuggee' state
+                     mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
+                     suggs <- getSuggestions mClosFilter debuggee'
+                     liftIO $ writeIORef appStateRef newAppState
+                     Scotty.html $ renderFilterSearchPage tree suggs (_filters os) (_version os) selectedPath mInc
                SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
                  Scotty.html $ renderPage u tree name selectedPath mInc
@@ -2220,17 +2222,6 @@ handleImg tree nodeName getName' pageName format' selectedPath = do
       svgContent <- liftIO $ BS.readFile svgPath
       Scotty.html $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
     _ -> error "Error: failed to find selected node in tree"
-
-handleModifyFilters :: IORef AppState -> ActionT IO ()
-handleModifyFilters appStateRef = do
-  state <- liftIO $ readIORef appStateRef
-  case state ^. majorState of
-    Connected _ debuggee' (PausedMode os) -> do
-      let mClosFilter = uiFiltersToFilter (_filters os)
-      suggs <- getSuggestions mClosFilter debuggee'
-      Scotty.html $ renderModifyFilterPage suggs (_filters os) (_version os)
-    _ -> Scotty.redirect "/"
-
 
 closureGetName :: ClosureDetails -> Maybe String
 closureGetName x = case x of ClosureDetails{} -> Just (closureName x); _ -> Nothing
@@ -2310,6 +2301,16 @@ getSuggestions mClosFilter debuggee' = do
   cloTypes <- getClosureTypes forSearch
   ccIds <- getCcIds debuggee' forSearch
   return $ Suggestions constrs cloNames cloTypes ccIds
+
+
+reconnect appStateRef = do
+  state <- liftIO $ readIORef appStateRef
+  case state ^. majorState of
+    Connected socket debuggee' (PausedMode os) -> do
+      let newAppState = updateAppState os (setTM $ SavedAndGCRoots undefined) socket debuggee' state
+      liftIO $ writeIORef appStateRef newAppState
+    _ -> return ()
+
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -2403,6 +2404,7 @@ app appStateRef = do
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
+    reconnect appStateRef
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Setup st knownDebuggees' knownSnapshots' -> do
@@ -2712,11 +2714,10 @@ app appStateRef = do
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
+        suggs <- getSuggestions mClosFilter debuggee'
+
+        Scotty.html $ renderFilterSearchPage tree suggs (_filters os) (_version os) selectedPath mInc
       _ -> Scotty.redirect "/" 
-  {- Modify filters -}
-  Scotty.get "/modifyFilters" (handleModifyFilters appStateRef)
-  Scotty.post "/modifyFilters" (handleModifyFilters appStateRef)
   {- Adds selected filter to list -}
   Scotty.post "/addFilter" $ do
     state <- liftIO $ readIORef appStateRef
@@ -2741,7 +2742,7 @@ app appStateRef = do
                           _ -> []
         let newAppState = updateAppState os (addFilters newFilter) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/modifyFilters"
+        Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/" 
   {- Deletes selected index from filters -}
   Scotty.post "/deleteFilter" $ do
@@ -2755,7 +2756,7 @@ app appStateRef = do
                                 in as ++ (tail bs)
             newAppState = updateAppState os (setFilters newFilters) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/modifyFilters"
+        Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/" 
   {- Clears all filters -}
   Scotty.post "/clearFilters" $ do
@@ -2764,7 +2765,7 @@ app appStateRef = do
       Connected socket debuggee' (PausedMode os) -> do
         let newAppState = updateAppState os (setFilters []) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/modifyFilters"
+        Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/"
   {- Set the amount of results from filter searches etc. Input <= 0 -> no limit -}
   Scotty.post "/setSearchLimit" $ do
