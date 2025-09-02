@@ -54,6 +54,13 @@ data AppState = AppState
   { _majorState :: MajorState
   }
 
+data Suggestions = Suggestions 
+  { _cons :: [String]
+  , _cloNames :: [String]
+  , _cloTypes :: [String]
+  , _ccIds :: [String]
+  }
+
 mkSocketInfo :: FilePath -> IO SocketInfo
 mkSocketInfo fp = SocketInfo fp <$> getModificationTime fp
 
@@ -137,7 +144,7 @@ data Utils a = Utils {
 }
 
 data TreeMode = SavedAndGCRoots
-              | Retainer (IOTree (ClosureDetails) Name)
+              | Retainer (IOTree (ClosureDetails) Name) Suggestions
               | forall a . SearchedHtml (Utils a) (IOTree a Name) String
 
 -- | Profiling requirement for a command

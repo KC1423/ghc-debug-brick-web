@@ -1045,26 +1045,24 @@ genericGet appStateRef index renderPage = do
           PausedMode os -> do 
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
-               Retainer tree' -> do
+               Retainer tree' suggs -> do
                  filterChanged <- filterChangedParam Scotty.queryParam
                  if not filterChanged 
                    then do
-                     let mClosFilter = uiFiltersToFilter (_filters os)
                      mInc <- liftIO $ getIncSize closureGetName closureGetSize tree' selectedPath
-                     suggs <- getSuggestions mClosFilter debuggee'
                      Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath mInc
                    else do
                      let mClosFilter = uiFiltersToFilter (_filters os)
                      cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
                      let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
                      res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
+                     suggs' <- getSuggestions mClosFilter debuggee'
                      let tree = mkRetainerTree debuggee' res
-                     let newTM = Retainer tree
+                     let newTM = Retainer tree suggs' 
                          newAppState = updateAppState os (setTM newTM) socket debuggee' state
                      mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-                     suggs <- getSuggestions mClosFilter debuggee'
                      liftIO $ writeIORef appStateRef newAppState
-                     Scotty.html $ renderFilterSearchPage tree suggs (_filters os) (_version os) selectedPath mInc
+                     Scotty.html $ renderFilterSearchPage tree suggs' (_filters os) (_version os) selectedPath mInc
                SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
                  Scotty.html $ renderPage u tree name selectedPath mInc
@@ -1163,13 +1161,6 @@ updateAppState os f socket debuggee' state = newAppState
 setTM :: TreeMode -> OperationalState -> OperationalState
 setTM treeMode' os = os { _treeMode = treeMode' }
 
-
-data Suggestions = Suggestions 
-  { _cons :: [String]
-  , _cloNames :: [String]
-  , _cloTypes :: [String]
-  , _ccIds :: [String]
-  }
 
 getConstructors :: MonadIO m => Debuggee
                 -> [[DebugClosure ccs srt pap ConstrDescCont s b]] -> m [String]
@@ -1405,9 +1396,9 @@ app appStateRef = do
             let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
-          Retainer tree -> do
+          Retainer tree suggs -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newAppState = updateAppState os (setTM $ Retainer newTree) socket debuggee' state
+            let newAppState = updateAppState os (setTM $ Retainer newTree suggs) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
           SearchedHtml f tree name -> do
@@ -1426,7 +1417,7 @@ app appStateRef = do
           SavedAndGCRoots -> do
             let tree = _treeSavedAndGCRoots os
             handleImg tree getNodeName closureName "connect" closureFormat selectedPath
-          Retainer tree -> do
+          Retainer tree _ -> do
             handleImg tree getNodeName closureName "searchWithFilters" closureFormat selectedPath
           SearchedHtml Utils{..} tree pageName -> do
             let nameFn = maybe "" id . _getName 
@@ -1482,7 +1473,7 @@ app appStateRef = do
                                      Nothing -> error "Error: selected node doesn't exist"
         case _treeMode os of
           SavedAndGCRoots -> handleTree (_treeSavedAndGCRoots os) dumpArrWord
-          Retainer tree -> handleTree tree dumpArrWord     
+          Retainer tree _ -> handleTree tree dumpArrWord     
           SearchedHtml Utils{..} tree _ -> handleTree tree _dumpArrWords
       _ -> Scotty.redirect "/"
   {- See arr_words count -}
@@ -1602,12 +1593,12 @@ app appStateRef = do
         cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
         let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
         res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
+        suggs <- getSuggestions mClosFilter debuggee'
         let tree = mkRetainerTree debuggee' res
-        let newTM = Retainer tree
+        let newTM = Retainer tree suggs
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
         liftIO $ writeIORef appStateRef newAppState
-        suggs <- getSuggestions mClosFilter debuggee'
 
         Scotty.html $ renderFilterSearchPage tree suggs (_filters os) (_version os) selectedPath mInc
       _ -> Scotty.redirect "/" 
