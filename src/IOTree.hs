@@ -55,7 +55,6 @@ ioTree name rootNodes getChildrenIO
     -- ^ TODO we could take the initial path but we'd have to expand through to
     -- that path with IO
     }
-  where
 
 nodeToTreeNode :: (node -> IO [node]) -> node -> IOTreeNode node name
 nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))

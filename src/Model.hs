@@ -20,7 +20,6 @@ import Control.Exception (try, SomeException)
 import Web.Scotty.Internal.Types
 import Lucid
 
-import Data.Sequence as Seq
 import Lens.Micro.Platform
 import Data.Time
 import System.Directory
@@ -29,7 +28,6 @@ import Data.Text(Text, pack)
 import qualified Data.Text as T
 import Text.Read
 
-import Brick.Widgets.List
 import Namespace
 import Common
 import Lib
@@ -45,8 +43,8 @@ initialAppState :: AppState
 initialAppState = AppState
   { _majorState = Setup
       { _setupKind = Socket
-      , _knownDebuggees = list Setup_KnownDebuggeesList [] 1
-      , _knownSnapshots = list Setup_KnownSnapshotsList [] 1
+      , _knownDebuggees = []
+      , _knownSnapshots = []
       }
   }
 
@@ -102,8 +100,8 @@ data MajorState
   -- | We have not yet connected to a debuggee.
   = Setup
     { _setupKind :: SetupKind
-    , _knownDebuggees :: GenericList Name Seq SocketInfo
-    , _knownSnapshots :: GenericList Name Seq SnapshotInfo
+    , _knownDebuggees :: [SocketInfo] --GenericList Name Seq SocketInfo
+    , _knownSnapshots :: [SnapshotInfo] --GenericList Name Seq SnapshotInfo
     }
 
   -- | Connected to a debuggee

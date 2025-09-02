@@ -25,7 +25,7 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg))
+import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled)
 import Data.GraphViz.Attributes.Complete (Attribute(URL))
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph)
@@ -49,14 +49,12 @@ import Data.Aeson (encode)
 import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC, getSourceInfo)
 import Data.Maybe (catMaybes)
 
-import Brick.Widgets.List
 import Control.Applicative
 import Control.Monad (forM)
 import Control.Monad.IO.Class
 import qualified Data.List as List
 import Data.Ord (comparing)
 import qualified Data.Ord as Ord
-import qualified Data.Sequence as Seq
 import Lens.Micro.Platform
 import System.Directory
 import System.FilePath
@@ -84,29 +82,16 @@ import qualified Numeric
 -- STATUS: Done (in use)
 updateListFrom :: MonadIO m =>
                         IO FilePath
-                        -> GenericList n Seq.Seq SocketInfo
-                        -> m (GenericList n Seq.Seq SocketInfo)
-updateListFrom dirIO llist = liftIO $ do
+                        -> m [SocketInfo]
+updateListFrom dirIO = liftIO $ do
             dir :: FilePath <- dirIO
             debuggeeSocketFiles :: [FilePath] <- listDirectory dir <|> return []
-
             -- Sort the sockets by the time they have been created, newest
             -- first.
             debuggeeSockets <- List.sortBy (comparing Ord.Down)
                                   <$> mapM (mkSocketInfo . (dir </>)) debuggeeSocketFiles
-
-            let currentSelectedPathMay :: Maybe SocketInfo
-                currentSelectedPathMay = fmap snd (listSelectedElement llist)
-
-                newSelection :: Maybe Int
-                newSelection = do
-                  currentSelectedPath <- currentSelectedPathMay
-                  List.findIndex ((currentSelectedPath ==)) debuggeeSockets
-
-            return $ listReplace
-                      (Seq.fromList debuggeeSockets)
-                      (newSelection <|> (if Prelude.null debuggeeSockets then Nothing else Just 0))
-                      llist
+            
+            return $ debuggeeSockets
 
 -- STATUS: Done (in use superficially, might not actually ever be used)
 getChildren :: Debuggee -> ClosureDetails
@@ -352,6 +337,12 @@ renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' o
   
     h3_ "Selection: "
     detailedSummary renderClosureSummary tree selectedPath mInc
+    form_ [ method_ "post", action_ "/takeSnapshot"
+          , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+      input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot name", required_ "required"]
+      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+      button_ [type_ "submit"] "Take snapshot"
+
     form_ [ method_ "post", action_ "/setSearchLimit"
           , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
       input_ [type_ "text", name_ "index", placeholder_ "Enter search limit", required_ "required"]
@@ -1244,11 +1235,11 @@ app appStateRef = do
   Scotty.get "/" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Setup st knownDebuggees' knownSnapshots' -> do
-        newKnownDebuggees <- liftIO $ updateListFrom socketDirectory knownDebuggees'
-        newKnownSnapshots <- liftIO $ updateListFrom snapshotDirectory knownSnapshots'
-        let socketList = F.toList $ newKnownDebuggees ^. listElementsL
-        let snapshotList = F.toList $ newKnownSnapshots ^. listElementsL
+      Setup st _ _ -> do
+        newKnownDebuggees <- liftIO $ updateListFrom socketDirectory
+        newKnownSnapshots <- liftIO $ updateListFrom snapshotDirectory
+        let socketList = F.toList $ newKnownDebuggees
+        let snapshotList = F.toList $ newKnownSnapshots
         liftIO $ writeIORef appStateRef $ state & majorState .~ Setup st newKnownDebuggees newKnownSnapshots
         case st of 
           Socket -> Scotty.html $ renderSocketSelectionPage st socketList
@@ -1318,10 +1309,10 @@ app appStateRef = do
         socketParam <- Scotty.formParam "socket"
         case st of
           Snapshot -> do
-            let snapshots = F.toList (knownSnapshots' ^. listElementsL)
+            let snapshots = F.toList knownSnapshots'
             handleConnect appStateRef state socketParam snapshots (\ _ -> pure True) snapshotConnect 
           Socket -> do
-            let sockets = F.toList (knownDebuggees' ^. listElementsL)
+            let sockets = F.toList knownDebuggees'
             handleConnect appStateRef state socketParam sockets
                           (\s -> isSocketAlive (_socketLocation s)) debuggeeConnect
       Connected socket debuggee' mode' -> do
@@ -1348,8 +1339,7 @@ app appStateRef = do
         ver <- liftIO $ GD.version debuggee'
         (rootsTree, initRoots) <- liftIO $ mkSavedAndGCRootsIOTree debuggee'
         let pausedState = PausedMode $
-                            OperationalState --Nothing
-                              --Nothing
+                            OperationalState
                               SavedAndGCRoots
                               (DefaultRoots initRoots)
                               rootsTree
