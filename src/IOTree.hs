@@ -25,34 +25,17 @@ module IOTree
 import Lucid
 import qualified Data.Set as Set
 
-import           Brick
-import           Control.Applicative
-import           Control.Monad.IO.Class
-import           Data.Maybe (fromMaybe)
-import qualified Data.List as List
-import           GHC.Stack
-import qualified Graphics.Vty.Input.Events as Vty
-import           Graphics.Vty.Input.Events (Key(..))
-import           Lens.Micro ((^.))
-
-
 -- A tree style list where items can be expanded and collapsed
 data IOTree node name = IOTree
     { _name :: name
     , _roots :: [IOTreeNode node name]
     , _getChildren :: (node -> IO [node])
-    , _renderRow :: RowState     -- is row expanded?
-                 -> Bool         -- is row selected?
-                 -> RowCtx       -- is current node last in subtree?
-                 -> [RowCtx]     -- per level of tree depth, are parent nodes last in subtree?
-                 -> node         -- the node to render
-                 -> Widget name
     -- Render some extra info as the first child of each node
     , _selection :: [Int]
     -- ^ Indices along the path to the current selection. Empty list means no
     -- selection.
     }
-
+ 
 data RowState = Expanded Bool | Collapsed
 data RowCtx = NotLastRow | LastRow
 
@@ -83,20 +66,12 @@ ioTree
   -- ^ Root nodes
   -> (node -> IO [node])
   -- ^ Get child nodes of a node
-  -> (RowState        -- is row expanded or collapsed?
-      -> Bool         -- Is row selected
-      -> RowCtx       -- innermost context
-      -> [RowCtx]     -- Tree depth
-      -> node         -- the node to render
-      -> Widget name)
-  -- ^ Row renderer (should add it's own indent based on depth)
   -> IOTree node name
-ioTree name rootNodes getChildrenIO renderRow
+ioTree name rootNodes getChildrenIO
   = IOTree
     { _name = name
     , _roots = nodeToTreeNode getChildrenIO <$> rootNodes
     , _getChildren = getChildrenIO
-    , _renderRow = renderRow
     , _selection = if null rootNodes then [] else [0]
     -- ^ TODO we could take the initial path but we'd have to expand through to
     -- that path with IO
@@ -164,7 +139,7 @@ renderIOTreeHtml :: (Ord name, Show name) => IOTree node name
                                           -> [Int]
                                           -> ([Int] -> [Int] -> Bool -> Bool -> node -> Html ())
                                           -> Html ()
-renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath renderRow =
+renderIOTreeHtml (IOTree _ roots _ _) selectedPath renderRow =
   let tree = flattenTreeHtml [] 0 roots [] []
   in div_ [class_ "iotree"] $
        go [] tree
@@ -181,7 +156,7 @@ renderIOTreeHtml (IOTree _ roots _ _ _) selectedPath renderRow =
                   in rowHtml <> childHtml
 
 getSubTree :: IOTree node name -> [Int] -> Maybe (IOTreeNode node name)
-getSubTree (IOTree _ roots _ _ _) path = findNodeByPath roots path
+getSubTree (IOTree _ roots _ _) path = findNodeByPath roots path
   where findNodeByPath :: [IOTreeNode node name] -> [Int] -> Maybe (IOTreeNode node name)
         findNodeByPath _ [] = Nothing
         findNodeByPath [] _ = Nothing
@@ -193,9 +168,9 @@ getSubTree (IOTree _ roots _ _ _) path = findNodeByPath roots path
 
 
 toggleTreeByPath :: IOTree node name -> [Int] -> IO (IOTree node name)
-toggleTreeByPath (IOTree a roots b c d) path = do
+toggleTreeByPath (IOTree a roots b c) path = do
   newRoots <- toggleNodeByPath roots path
-  return $ IOTree a newRoots b c d
+  return $ IOTree a newRoots b c
 
 toggleNodeByPath :: [IOTreeNode node name] -> [Int] -> IO [IOTreeNode node name]
 toggleNodeByPath [] _ = return []

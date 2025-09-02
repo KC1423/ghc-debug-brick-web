@@ -152,8 +152,6 @@ mkIOTree :: Debuggee
 mkIOTree debuggee' cs getChildrenGen sort = ioTree Connected_Paused_ClosureTree
         (sort cs)
         (\c -> sort <$> getChildrenGen debuggee' c)
-        -- rendering the row
-        undefined
 
 -- STATUS: Done (in use)
 prettyCCS :: GenCCSPayload CCSPtr CCPayload -> Text
