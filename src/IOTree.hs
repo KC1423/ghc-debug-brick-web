@@ -7,11 +7,7 @@
 
 module IOTree
   ( IOTree(..)
-  , IOTreePath
-  , RowState(..)
   , ioTree
-  , setIOTreeRoots
-  , getIOTreeRoots
 
   , renderIOTreeHtml
   , IOTreeNode(..)
@@ -28,25 +24,11 @@ import qualified Data.Set as Set
 data IOTree node name = IOTree
     { _name :: name
     , _roots :: [IOTreeNode node name]
-    , _getChildren :: (node -> IO [node])
-    -- Render some extra info as the first child of each node
     , _selection :: [Int]
     -- ^ Indices along the path to the current selection. Empty list means no
     -- selection.
     }
  
-data RowState = Expanded Bool | Collapsed
-
-setIOTreeRoots :: [node] -> IOTree node name ->  IOTree node name
-setIOTreeRoots newRoots iot = iot { _roots = (nodeToTreeNode (_getChildren iot) <$> newRoots) }
-
-getIOTreeRoots :: IOTree node name -> [node]
-getIOTreeRoots iot = map _node (_roots iot)
-
-
-
-type IOTreePath node = [(Int, node)]
-
 data IOTreeNode node name
   = IOTreeNode
     { _node :: node
@@ -69,7 +51,6 @@ ioTree name rootNodes getChildrenIO
   = IOTree
     { _name = name
     , _roots = nodeToTreeNode getChildrenIO <$> rootNodes
-    , _getChildren = getChildrenIO
     , _selection = if null rootNodes then [] else [0]
     -- ^ TODO we could take the initial path but we'd have to expand through to
     -- that path with IO
@@ -82,51 +63,27 @@ nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))
 
 {- New code / web stuff -}
 
-flattenTreeHtml
-  :: Int
-  -> [IOTreeNode node name]
-  -> [Int]
-  -> [Int]
-  -> [RenderTree node]
-flattenTreeHtml _ [] _ _ = []
-flattenTreeHtml minorIx (IOTreeNode node' csE : ns) selection parentPath =
-  case csE of
-    Left _ -> RenderNode node' Nothing : rest
-    Right cs -> RenderNode node' 
-                  (Just ((flattenTreeHtml 0 cs 
-                        (if childIsSelected then drop 1 selection else []) thisPath)))
-                      : rest
-  where rest = flattenTreeHtml (minorIx + 1) ns selection parentPath
-        thisPath = parentPath ++ [minorIx]
-        childIsSelected = selection `isChildOf` thisPath
-        isChildOf :: Eq a => [a] -> [a] -> Bool
-        isChildOf (x:xs) (y:ys) = x == y && isChildOf xs ys
-        isChildOf [] _ = True
-        isChildOf _ [] = False
-
-
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
                                           -> [Int]
                                           -> ([Int] -> [Int] -> Bool -> Bool -> node -> Html ())
                                           -> Html ()
-renderIOTreeHtml (IOTree _ roots _ _) selectedPath renderRow =
-  let tree = flattenTreeHtml 0 roots [] []
-  in div_ [class_ "iotree"] $
-       go [] tree
+renderIOTreeHtml (IOTree _ roots _) selectedPath renderRow =
+  div_ [class_ "iotree"] $
+    go [] roots
   where go _ [] = mempty
         go parentPath trees = mconcat $ zipWith renderOne [0..] trees
-          where renderOne ix (RenderNode nodeContent children) =
+          where renderOne ix (IOTreeNode nodeContent children) =
                   let thisPath = parentPath ++ [ix]
                       selected = thisPath == selectedPath
                       expanded = case children of
-                                   Nothing -> False
-                                   Just _ -> True
+                                   Left _ -> False
+                                   Right _ -> True
                       rowHtml = renderRow selectedPath thisPath expanded selected nodeContent
-                      childHtml = go thisPath (maybe [] id children)
+                      childHtml = go thisPath (either (const []) id children)
                   in rowHtml <> childHtml
 
 getSubTree :: IOTree node name -> [Int] -> Maybe (IOTreeNode node name)
-getSubTree (IOTree _ roots _ _) path = findNodeByPath roots path
+getSubTree (IOTree _ roots _) path = findNodeByPath roots path
   where findNodeByPath :: [IOTreeNode node name] -> [Int] -> Maybe (IOTreeNode node name)
         findNodeByPath _ [] = Nothing
         findNodeByPath [] _ = Nothing
@@ -138,9 +95,9 @@ getSubTree (IOTree _ roots _ _) path = findNodeByPath roots path
 
 
 toggleTreeByPath :: IOTree node name -> [Int] -> IO (IOTree node name)
-toggleTreeByPath (IOTree a roots b c) path = do
+toggleTreeByPath (IOTree a roots b) path = do
   newRoots <- toggleNodeByPath roots path
-  return $ IOTree a newRoots b c
+  return $ IOTree a newRoots b
 
 toggleNodeByPath :: [IOTreeNode node name] -> [Int] -> IO [IOTreeNode node name]
 toggleNodeByPath [] _ = return []
@@ -191,5 +148,3 @@ expandNodeWithCap cap n' format = do
           (c', seen') <- go seen c
           (cs', seen'') <- processChildren seen' cs
           return (c':cs', seen'')
-
-data RenderTree a = RenderNode a (Maybe [RenderTree a])
