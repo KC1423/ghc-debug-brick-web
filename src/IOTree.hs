@@ -79,11 +79,6 @@ ioTree name rootNodes getChildrenIO
 nodeToTreeNode :: (node -> IO [node]) -> node -> IOTreeNode node name
 nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))
 
-data TreeNodeWithRenderContext node = TreeNodeWithRenderContext
-  { _nodeState ::  RowState
-  , _nodeSelected :: Bool
-  , _nodeContent :: node
-  }
 
 {- New code / web stuff -}
 
@@ -92,23 +87,18 @@ flattenTreeHtml
   -> [IOTreeNode node name]
   -> [Int]
   -> [Int]
-  -> [RenderTree (TreeNodeWithRenderContext node)]
+  -> [RenderTree node]
 flattenTreeHtml _ [] _ _ = []
 flattenTreeHtml minorIx (IOTreeNode node' csE : ns) selection parentPath =
   case csE of
-    Left _ -> RenderNode (row Collapsed) [] : rest
-    Right cs -> RenderNode (row (Expanded True)) 
-                  (flattenTreeHtml 0 cs 
-                      (if childIsSelected then drop 1 selection else []) thisPath)
-                  : rest
+    Left _ -> RenderNode node' Nothing : rest
+    Right cs -> RenderNode node' 
+                  (Just ((flattenTreeHtml 0 cs 
+                        (if childIsSelected then drop 1 selection else []) thisPath)))
+                      : rest
   where rest = flattenTreeHtml (minorIx + 1) ns selection parentPath
         thisPath = parentPath ++ [minorIx]
         childIsSelected = selection `isChildOf` thisPath
-        row state = TreeNodeWithRenderContext {
-          _nodeState = state,
-          _nodeSelected = False,
-          _nodeContent = node'
-        }
         isChildOf :: Eq a => [a] -> [a] -> Bool
         isChildOf (x:xs) (y:ys) = x == y && isChildOf xs ys
         isChildOf [] _ = True
@@ -125,14 +115,14 @@ renderIOTreeHtml (IOTree _ roots _ _) selectedPath renderRow =
        go [] tree
   where go _ [] = mempty
         go parentPath trees = mconcat $ zipWith renderOne [0..] trees
-          where renderOne ix (RenderNode TreeNodeWithRenderContext{..} children) =
+          where renderOne ix (RenderNode nodeContent children) =
                   let thisPath = parentPath ++ [ix]
                       selected = thisPath == selectedPath
-                      expanded = case _nodeState of 
-                                   Expanded True -> True
-                                   _ -> False
-                      rowHtml = renderRow selectedPath thisPath expanded selected _nodeContent
-                      childHtml = go thisPath children
+                      expanded = case children of
+                                   Nothing -> False
+                                   Just _ -> True
+                      rowHtml = renderRow selectedPath thisPath expanded selected nodeContent
+                      childHtml = go thisPath (maybe [] id children)
                   in rowHtml <> childHtml
 
 getSubTree :: IOTree node name -> [Int] -> Maybe (IOTreeNode node name)
@@ -202,4 +192,4 @@ expandNodeWithCap cap n' format = do
           (cs', seen'') <- processChildren seen' cs
           return (c':cs', seen'')
 
-data RenderTree a = RenderNode a [RenderTree a]
+data RenderTree a = RenderNode a (Maybe [RenderTree a])
