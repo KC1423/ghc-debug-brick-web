@@ -49,23 +49,14 @@ import Data.Aeson (encode)
 import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC, getSourceInfo)
 import Data.Maybe (catMaybes)
 
-import Brick
-import Brick.BChan
-import Brick.Forms
-import Brick.Widgets.Border
-import Brick.Widgets.Center (centerLayer, hCenter)
 import Brick.Widgets.List
 import Control.Applicative
 import Control.Monad (forM)
 import Control.Monad.IO.Class
-import Control.Monad.Catch (bracket)
-import Control.Concurrent
 import qualified Data.List as List
 import Data.Ord (comparing)
 import qualified Data.Ord as Ord
 import qualified Data.Sequence as Seq
-import qualified Graphics.Vty as Vty
-import Graphics.Vty.Input.Events (Key(..))
 import Lens.Micro.Platform
 import System.Directory
 import System.FilePath
@@ -88,8 +79,6 @@ import IOTree
 import Lib as GD
 import Model
 import Data.ByteUnits
-import Data.Time.Format
-import Data.Time.Clock
 import qualified Numeric
 
 -- STATUS: Done (in use)
@@ -1079,7 +1068,6 @@ genericGet appStateRef index renderPage = do
                SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
                  Scotty.html $ renderPage u tree name selectedPath mInc
-               _ -> error "Error: 'Searched' tree mode deprecated"
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
 
@@ -1230,7 +1218,7 @@ getSuggestions mClosFilter debuggee' = do
   ccIds <- getCcIds debuggee' forSearch
   return $ Suggestions constrs cloNames cloTypes ccIds
 
-
+reconnect :: MonadIO m => IORef AppState -> m ()
 reconnect appStateRef = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
@@ -1395,7 +1383,7 @@ app appStateRef = do
   Scotty.post "/exit" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected _ debuggee' (PausedMode os) -> do
+      Connected _ debuggee' (PausedMode _) -> do
         liftIO $ resume debuggee'
         let newAppState = initialAppState
         liftIO $ writeIORef appStateRef newAppState
@@ -1427,7 +1415,6 @@ app appStateRef = do
             let newAppState = updateAppState os (setTM $ SearchedHtml f newTree name) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
-          _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- Creates and displays the graph for the selected object -}
   Scotty.post "/img" $ do
@@ -1444,7 +1431,6 @@ app appStateRef = do
           SearchedHtml Utils{..} tree pageName -> do
             let nameFn = maybe "" id . _getName 
             handleImg tree (\(IOTreeNode n' _) -> nameFn n') nameFn pageName _graphFormat selectedPath
-          _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- View profile (level 1 and 2) -}
   genericGet appStateRef "/profile" renderProfilePage
@@ -1498,7 +1484,6 @@ app appStateRef = do
           SavedAndGCRoots -> handleTree (_treeSavedAndGCRoots os) dumpArrWord
           Retainer tree -> handleTree tree dumpArrWord     
           SearchedHtml Utils{..} tree _ -> handleTree tree _dumpArrWords
-          _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- See arr_words count -}
   genericGet appStateRef "/arrWordsCount" (renderCountPage "ARR_WORDS")

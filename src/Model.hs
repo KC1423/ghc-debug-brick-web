@@ -20,7 +20,6 @@ import Control.Exception (try, SomeException)
 import Web.Scotty.Internal.Types
 import Lucid
 
-import Data.Maybe (fromMaybe)
 import Data.Sequence as Seq
 import Lens.Micro.Platform
 import Data.Time
@@ -30,17 +29,11 @@ import Data.Text(Text, pack)
 import qualified Data.Text as T
 import Text.Read
 
-import Brick.Forms
-import Brick.BChan
-import Brick (EventM, Widget)
 import Brick.Widgets.List
-
 import Namespace
 import Common
 import Lib
 import IOTree
-import Control.Concurrent
-import qualified Graphics.Vty as Vty
 import Data.Int
 import GHC.Debug.Client (ccID)
 import GHC.Debug.Client.Monad (DebugM)

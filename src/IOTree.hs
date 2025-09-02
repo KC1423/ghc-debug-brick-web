@@ -90,16 +90,6 @@ data TreeNodeWithRenderContext node = TreeNodeWithRenderContext
   , _nodeContent :: node
   }
 
-{-
--- | A view (or Zipper) used to navigate the tree
-data IOTreeView node name
-  = Root (IOTree node name)
-  | Node
-      (IOTreeNode node name -> IOTreeView node name) -- reconstruct the parent given this node
-      Int -- The index in the parent
-      (IOTreeNode node name) -- This node
--}
-
 {- New code / web stuff -}
 
 flattenTreeHtml
