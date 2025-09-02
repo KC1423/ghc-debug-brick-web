@@ -9,7 +9,6 @@ module IOTree
   ( IOTree(..)
   , IOTreePath
   , RowState(..)
-  , RowCtx(..)
   , ioTree
   , setIOTreeRoots
   , getIOTreeRoots
@@ -37,7 +36,6 @@ data IOTree node name = IOTree
     }
  
 data RowState = Expanded Bool | Collapsed
-data RowCtx = NotLastRow | LastRow
 
 setIOTreeRoots :: [node] -> IOTree node name ->  IOTree node name
 setIOTreeRoots newRoots iot = iot { _roots = (nodeToTreeNode (_getChildren iot) <$> newRoots) }
@@ -82,41 +80,33 @@ nodeToTreeNode :: (node -> IO [node]) -> node -> IOTreeNode node name
 nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))
 
 data TreeNodeWithRenderContext node = TreeNodeWithRenderContext
-  { _nodeDepth :: Int
-  , _nodeState ::  RowState
+  { _nodeState ::  RowState
   , _nodeSelected :: Bool
-  , _nodeLast :: RowCtx
-  , _nodeParentLast :: [RowCtx]
   , _nodeContent :: node
   }
 
 {- New code / web stuff -}
 
 flattenTreeHtml
-  :: [RowCtx]
-  -> Int
+  :: Int
   -> [IOTreeNode node name]
   -> [Int]
   -> [Int]
   -> [RenderTree (TreeNodeWithRenderContext node)]
-flattenTreeHtml _ _ [] _ _ = []
-flattenTreeHtml depth minorIx (IOTreeNode node' csE : ns) selection parentPath =
+flattenTreeHtml _ [] _ _ = []
+flattenTreeHtml minorIx (IOTreeNode node' csE : ns) selection parentPath =
   case csE of
     Left _ -> RenderNode (row Collapsed) [] : rest
     Right cs -> RenderNode (row (Expanded True)) 
-                  (flattenTreeHtml (rowCtx : depth) 0 cs 
+                  (flattenTreeHtml 0 cs 
                       (if childIsSelected then drop 1 selection else []) thisPath)
                   : rest
-  where rest = flattenTreeHtml depth (minorIx + 1) ns selection parentPath
+  where rest = flattenTreeHtml (minorIx + 1) ns selection parentPath
         thisPath = parentPath ++ [minorIx]
         childIsSelected = selection `isChildOf` thisPath
-        rowCtx = if null ns then LastRow else NotLastRow
         row state = TreeNodeWithRenderContext {
-          _nodeDepth = length depth,
           _nodeState = state,
           _nodeSelected = False,
-          _nodeLast = rowCtx,
-          _nodeParentLast = depth,
           _nodeContent = node'
         }
         isChildOf :: Eq a => [a] -> [a] -> Bool
@@ -130,7 +120,7 @@ renderIOTreeHtml :: (Ord name, Show name) => IOTree node name
                                           -> ([Int] -> [Int] -> Bool -> Bool -> node -> Html ())
                                           -> Html ()
 renderIOTreeHtml (IOTree _ roots _ _) selectedPath renderRow =
-  let tree = flattenTreeHtml [] 0 roots [] []
+  let tree = flattenTreeHtml 0 roots [] []
   in div_ [class_ "iotree"] $
        go [] tree
   where go _ [] = mempty
