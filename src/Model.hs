@@ -143,9 +143,8 @@ data Utils a = Utils {
   _getSize :: a -> Int
 }
 
-data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
-              | Retainer (ClosureDetails -> Widget Name) (IOTree (ClosureDetails) Name)
-              | forall a . Searched (a -> Widget Name) (IOTree a Name)
+data TreeMode = SavedAndGCRoots
+              | Retainer (IOTree (ClosureDetails) Name)
               | forall a . SearchedHtml (Utils a) (IOTree a Name) String
 
 -- | Profiling requirement for a command
@@ -244,13 +243,6 @@ showEraRange (EraRange s e)
     go n
       | n == maxBound = "∞)"
       | otherwise = show n ++ "]"
-
-pauseModeTree :: (forall a . (a -> Widget Name) -> IOTree a Name -> r) -> OperationalState -> r
-pauseModeTree k (OperationalState mode _from roots _ _ _) = case mode of
-  SavedAndGCRoots render -> k render roots
-  Retainer render r -> k render r
-  Searched render r -> k render r
-  _ -> error "Error: web stuff here"
 
 makeLenses ''AppState
 makeLenses ''MajorState

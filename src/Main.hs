@@ -147,16 +147,11 @@ fillListItem _ (ListCC c1) = return $ ListCC c1
 mkIOTree :: Debuggee
          -> [a]
          -> (Debuggee -> a -> IO [a])
-         -> (a -> [Widget Name])
--- -> IO [(String, ListItem SrtCont PayloadCont ConstrDesc StackCont ClosurePtr)])
          -> ([a] -> [a])
          -> IOTree a Name
-mkIOTree debuggee' cs getChildrenGen renderNode sort = ioTree Connected_Paused_ClosureTree
+mkIOTree debuggee' cs getChildrenGen sort = ioTree Connected_Paused_ClosureTree
         (sort cs)
-        (\c -> sort <$> getChildrenGen debuggee' c
---            cDets <- mapM (\(lbl, child) -> getClosureDetails debuggee' manalysis (pack lbl) child) children
---            return (sort cDets)
-        )
+        (\c -> sort <$> getChildrenGen debuggee' c)
         -- rendering the row
         undefined
 
@@ -224,13 +219,6 @@ getInfoInfo debuggee' label' infoPtr = do
       , _profHeaderInfo = Nothing
       }
 
-
--- STATUS: Done (unsure, in use)
-savedAndGCRoots :: TreeMode
-savedAndGCRoots = SavedAndGCRoots undefined --renderClosureDetails
-
-
-
 -- STATUS: Done (in use)
 mkRetainerTree :: Debuggee -> [[ClosureDetails]] -> IOTree ClosureDetails Name
 mkRetainerTree dbg stacks = do
@@ -250,7 +238,7 @@ mkRetainerTree dbg stacks = do
       -- And if it's not a closure, just do the normal thing
       lookup_c dbg' dc' = getChildren dbg' dc'
 
-  mkIOTree dbg roots lookup_c {-renderInlineClosureDesc-} undefined id
+  mkIOTree dbg roots lookup_c id
 
 
 data ArrWordsLine k = CountLine k Int Int | FieldLine ClosureDetails
@@ -387,7 +375,6 @@ renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' o
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
       Retainer {} -> pack "Retainers"
-      Searched {} -> pack "Search Results"
       SearchedHtml {} -> pack "Search Results"
     
     --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
@@ -1071,7 +1058,7 @@ genericGet appStateRef index renderPage = do
           PausedMode os -> do 
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
-               Retainer _ tree' -> do
+               Retainer tree' -> do
                  filterChanged <- filterChangedParam Scotty.queryParam
                  if not filterChanged 
                    then do
@@ -1085,7 +1072,7 @@ genericGet appStateRef index renderPage = do
                      let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
                      res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
                      let tree = mkRetainerTree debuggee' res
-                     let newTM = Retainer {-renderClosureDetails-} undefined tree
+                     let newTM = Retainer tree
                          newAppState = updateAppState os (setTM newTM) socket debuggee' state
                      mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
                      suggs <- getSuggestions mClosFilter debuggee'
@@ -1250,7 +1237,7 @@ reconnect appStateRef = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
     Connected socket debuggee' (PausedMode os) -> do
-      let newAppState = updateAppState os (setTM $ SavedAndGCRoots undefined) socket debuggee' state
+      let newAppState = updateAppState os (setTM SavedAndGCRoots) socket debuggee' state
       liftIO $ writeIORef appStateRef newAppState
     _ -> return ()
 
@@ -1386,7 +1373,7 @@ app appStateRef = do
         let pausedState = PausedMode $
                             OperationalState --Nothing
                               --Nothing
-                              savedAndGCRoots
+                              SavedAndGCRoots
                               (DefaultRoots initRoots)
                               rootsTree
                               (Just 100)
@@ -1426,15 +1413,15 @@ app appStateRef = do
     case state ^. majorState of
       Connected socket debuggee' (PausedMode os) -> do
         case _treeMode os of
-          SavedAndGCRoots _ -> do 
+          SavedAndGCRoots -> do 
             let tree = _treeSavedAndGCRoots os
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
             let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
-          Retainer f tree -> do
+          Retainer tree -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newAppState = updateAppState os (setTM $ Retainer f newTree) socket debuggee' state
+            let newAppState = updateAppState os (setTM $ Retainer newTree) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
           SearchedHtml f tree name -> do
@@ -1451,10 +1438,10 @@ app appStateRef = do
     case state ^. majorState of
       Connected _ _ (PausedMode os) ->
         case _treeMode os of
-          SavedAndGCRoots _ -> do
+          SavedAndGCRoots -> do
             let tree = _treeSavedAndGCRoots os
             handleImg tree getNodeName closureName "connect" closureFormat selectedPath
-          Retainer _ tree -> do
+          Retainer tree -> do
             handleImg tree getNodeName closureName "searchWithFilters" closureFormat selectedPath
           SearchedHtml Utils{..} tree pageName -> do
             let nameFn = maybe "" id . _getName 
@@ -1486,7 +1473,7 @@ app appStateRef = do
                 filledC <- fillListItem debuggee' c
                 return (show i, filledC)
               mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee' (pack lbl) filledItem) filled
-        let tree = mkIOTree debuggee' sortedProfiles gChildren {-renderProfileLine-} undefined id
+        let tree = mkIOTree debuggee' sortedProfiles gChildren id
         let profFormat x = case x of ClosureLine c -> closureFormat c; _ -> ""
         let getName' x = case x of ClosureLine c -> Just (closureName c); _ -> Nothing
         let getSize' x = case x of
@@ -1499,15 +1486,6 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef newAppState
         Scotty.html $ renderProfilePage utils tree "profile" selectedPath mInc
       _ -> Scotty.redirect "/"
-  {- Returns to /connect, sets the treeMode -}
-  Scotty.post "/reconnect" $ do
-    state <- liftIO $ readIORef appStateRef
-    case state ^. majorState of
-      Connected socket debuggee' (PausedMode os) -> do
-        let newAppState = updateAppState os (setTM $ SavedAndGCRoots undefined) socket debuggee' state
-        liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/connect"
-      _ -> Scotty.redirect "/"
   {- Downloads the arr_words payload -}
   Scotty.get "/dumpArrWords" $ do
     state <- liftIO $ readIORef appStateRef
@@ -1519,8 +1497,8 @@ app appStateRef = do
                                      Just (IOTreeNode node' _) -> dump node'
                                      Nothing -> error "Error: selected node doesn't exist"
         case _treeMode os of
-          SavedAndGCRoots _ -> handleTree (_treeSavedAndGCRoots os) dumpArrWord
-          Retainer _ tree -> handleTree tree dumpArrWord     
+          SavedAndGCRoots -> handleTree (_treeSavedAndGCRoots os) dumpArrWord
+          Retainer tree -> handleTree tree dumpArrWord     
           SearchedHtml Utils{..} tree _ -> handleTree tree _dumpArrWords
           _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
@@ -1562,7 +1540,7 @@ app appStateRef = do
             return ()
           Left _ -> error "Font file missing"
 
-        let tree = mkIOTree debuggee' top_closure g_children {-renderArrWordsLines-} undefined id
+        let tree = mkIOTree debuggee' top_closure g_children id
         mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
 
         let (newTM, utils) = countTM words_histogram tree "arrWordsCount"
@@ -1594,7 +1572,7 @@ app appStateRef = do
               mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
             g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
-        let tree = mkIOTree debuggee' top_closure g_children {-renderArrWordsLines-} undefined id
+        let tree = mkIOTree debuggee' top_closure g_children id
         mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
         let (newTM, utils) = countTM Nothing tree "stringsCount"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
@@ -1613,7 +1591,7 @@ app appStateRef = do
         let top_closure = Prelude.reverse [ ThunkLine k v | (k, v) <- (List.sortBy (comparing (getCount . snd)) (M.toList thunkMap))]
 
             g_children _ (ThunkLine {}) = pure []
-        let tree = mkIOTree debuggee' top_closure g_children undefined id
+        let tree = mkIOTree debuggee' top_closure g_children id
         let utils = Utils renderThunkAnalysisHtml renderThunkAnalysisSummary (\_->"") arrDumpThunk (\_->Nothing) (\_->0) 
         let newTM = SearchedHtml utils tree "thunkAnalysis"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
@@ -1642,7 +1620,7 @@ app appStateRef = do
         let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
         res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
         let tree = mkRetainerTree debuggee' res
-        let newTM = Retainer {-renderClosureDetails-} undefined tree
+        let newTM = Retainer tree
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
         liftIO $ writeIORef appStateRef newAppState
@@ -1720,7 +1698,7 @@ app appStateRef = do
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
           raw_saved <- map ("Saved Object",) <$> GD.savedClosures debuggee'
           savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
-          return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren {-renderInlineClosureDesc-} undefined id
+          return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
 
