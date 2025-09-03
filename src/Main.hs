@@ -318,8 +318,8 @@ navStyle = T.unlines
   , ".content { margin-top: 20px }"
   ]
 
-renderConnectedPage :: [Int] -> Maybe (Int, Bool) -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
-renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' of
+renderConnectedPage :: [Int] -> CDIO -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
+renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
@@ -336,7 +336,8 @@ renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' o
     
   
     h3_ "Selection: "
-    detailedSummary renderClosureSummary tree selectedPath mInc
+    detailedSummary renderClosureSummary tree selectedPath cdio
+    --renderMImg cdio
     form_ [ method_ "post", action_ "/takeSnapshot"
           , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
       input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot name", required_ "required"]
@@ -359,8 +360,8 @@ renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' o
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
 
-renderClosureSummary :: ClosureDetails -> [Int] -> Maybe (Int, Bool) -> Html ()
-renderClosureSummary node' path mInc =
+renderClosureSummary :: ClosureDetails -> [Int] -> CDIO -> Html ()
+renderClosureSummary node' path cdio@CDIO{..} =
   case node' of
     ClosureDetails _ excSize' info' -> do 
       renderInfoSummary info'
@@ -371,13 +372,10 @@ renderClosureSummary node' path mInc =
           ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{}}} -> do
             li_ $ a_ [href_ ("/dumpArrWords?selected=" <> encodePath path)] "Dump ARR_WORDS payload"
           _ -> mempty
-        case mInc of
+        case _mInc of
           Nothing -> mempty
           Just (incSize, capped) -> renderIncSize incSize capped path
-        form_ [method_ "post", action_ "/img"] $ do
-          input_ [type_ "hidden", name_ "selected", value_ (encodePath path)]
-          button_ [type_ "submit", class_ "viz-button"] $ "See graph" 
-
+        renderMImg cdio
     LabelNode n -> li_ $ toHtml n
     InfoDetails info' -> renderInfoSummary info'
     CCSDetails _ _ptr (Debug.CCSPayload{..}) -> do
@@ -388,31 +386,34 @@ renderClosureSummary node' path mInc =
     CCDetails _ c -> renderCC c
 
 detailedSummary :: (Ord name, Show name)
-                => (a -> [Int] -> Maybe (Int, Bool) -> Html ())
-                -> IOTree a name -> [Int] -> Maybe (Int, Bool) -> Html ()
-detailedSummary f tree path mInc =
+                => (a -> [Int] -> CDIO -> Html ())
+                -> IOTree a name -> [Int] -> CDIO -> Html ()
+detailedSummary f tree path cdio =
   div_ [class_ "selection-summary"] $ do
     case getSubTree tree path of
       Nothing -> mempty
-      Just (IOTreeNode node' _) -> f node' path mInc
+      Just (IOTreeNode node' _) -> f node' path cdio
     
 summaryEntry :: (Monad m, Term (HtmlT m ()) result, ToHtml a) => HtmlT m () -> a -> result
 summaryEntry title value = li_ $ strong_ (title <> ": ") >> toHtml value
 
-renderProfileSummary :: CensusStats -> ProfileLine -> [Int] -> Maybe (Int, Bool) -> Html ()
-renderProfileSummary totalStats line path mInc = do
+renderProfileSummary :: CensusStats -> ProfileLine -> [Int] -> CDIO -> Html ()
+renderProfileSummary totalStats line path cdio = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
       h3_ "Selection: "
       ul_ $ renderLineSummary line
 
+    --div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
+      --renderMImg cdio 
+
     -- Right column: Total stats
     div_ [ style_ "flex: 1;" ] $ do
       h3_ "Total: "
       ul_ $ renderLineSummary (ProfileLine (GDP.ProfileClosureDesc "Total") GDP.NoArgs totalStats)
   where 
-    renderLineSummary (ClosureLine cs) = renderClosureSummary cs path mInc
+    renderLineSummary (ClosureLine cs) = renderClosureSummary cs path cdio
     renderLineSummary (ProfileLine k args (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _)) = do
       summaryEntry "Label" (truncT (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args))
       case k of
@@ -427,8 +428,8 @@ renderProfileSummary totalStats line path mInc = do
       summaryEntry "Average" (renderBytesHtml @Double (fromIntegral s / fromIntegral n))
 
   
-renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> [Int] -> Maybe (Int, Bool) -> Html ()
-renderCountSummary mh line path mInc = do
+renderCountSummary :: Show a => Maybe (Html ()) -> ArrWordsLine a -> [Int] -> CDIO -> Html ()
+renderCountSummary mh line path cdio = do
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
@@ -451,9 +452,9 @@ renderCountSummary mh line path mInc = do
         summaryEntry "Size" (renderBytesHtml l)
         summaryEntry "Total size" (renderBytesHtml $ n * l)
         li_ $ toHtml $ trunc (show b)
-      renderLineSummary (FieldLine c) = renderClosureSummary c path mInc
+      renderLineSummary (FieldLine c) = renderClosureSummary c path cdio
 
-renderThunkAnalysisSummary :: ThunkLine -> [Int] -> Maybe (Int, Bool) -> Html ()
+renderThunkAnalysisSummary :: ThunkLine -> [Int] -> CDIO -> Html ()
 renderThunkAnalysisSummary (ThunkLine msc c) _ _ = do
   h3_ "Selection: "
   case msc of
@@ -475,72 +476,75 @@ renderIncSize incSize capped _ = do
       button_ [type_ "submit", class_ "inc-button"] $ "See inclusive size"
   else mempty-}
 
-renderImgPage :: String -> String -> [Int] -> Bool -> TL.Text -> TL.Text
-renderImgPage returnTo name selectedPath capped svgContent =
-  renderText $ do
-    h1_ $ toHtml $ "Visualisation of " ++ name
-    if capped then h2_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
-    body_ $ do
-      let pathStr = encodePath selectedPath
-      div_ $ a_ [href_ ("/" <> pack returnTo <> "?selected=" <> pathStr)] $ "Return to debuggee"
-      div_ $ a_ [ href_ "/graph"
-                , download_ "graph.svg"
-                , style_ "display: inline-block; margin-top: 1em;"
-                ] "Download SVG"
-      --img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
-      -- this code renders the svg with JS so it is interactive
-      div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; height: 80vh; overflow: hidden;"] $ 
-        toHtmlRaw svgContent
-      script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
-      script_ $ mconcat
-        [ "const element = document.querySelector('#svg-container svg');"
-        , "panzoom(element, {"
-        , "  bounds: true,"
-        , "  boundsPadding: 0.1,"
-        , "  zoomDoubleClickSpeed: 1,"
-        , "  maxZoom: 10,"
-        , "  minZoom: 0.1"
-        , "});"
-        ]
+renderMImg :: CDIO -> Html ()
+renderMImg CDIO {..} = 
+  case _imgInfo of
+    Nothing -> mempty
+    Just ImgInfo{..} -> renderImgPage "RETURN" _name [] _capped _svgContent
+
+renderImgPage :: String -> String -> [Int] -> Bool -> TL.Text -> Html () 
+renderImgPage returnTo name selectedPath capped svgContent = do
+  h2_ $ toHtml $ "Visualisation of " ++ name
+  if capped then h3_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
+  body_ $ do
+    div_ $ a_ [ href_ "/graph"
+              , download_ "graph.svg"
+              , style_ "display: inline-block; margin-top: 1em;"
+              ] "Download SVG"
+    --img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
+    -- this code renders the svg with JS so it is interactive
+    div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; height: 80vh; overflow: hidden;"] $ 
+      toHtmlRaw svgContent
+    script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
+    script_ $ mconcat
+      [ "const element = document.querySelector('#svg-container svg');"
+      , "panzoom(element, {"
+      , "  bounds: true,"
+      , "  boundsPadding: 0.1,"
+      , "  zoomDoubleClickSpeed: 1,"
+      , "  maxZoom: 10,"
+      , "  minZoom: 0.1"
+      , "});"
+      ]
       
 genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -> Html ())
-                -> (node -> [Int] -> Maybe (Int, Bool) -> Html ()) -> String -> Maybe (Int, Bool)
+                -> (node -> [Int] -> CDIO -> Html ()) -> String -> CDIO
                 -> HtmlT Identity ()
-genericTreeBody tree selectedPath renderRow renderSummary' name mInc = do
-  detailedSummary renderSummary' tree selectedPath mInc
+genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
+  detailedSummary renderSummary' tree selectedPath cdio
   h3_ "Results"
   renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
   autoScrollScript
 
 renderProfilePage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
-                  -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderProfilePage Utils{..} tree name selectedPath mInc = renderText $ pageLayout "/profile" $ do
+                  -> [Int] -> CDIO -> TL.Text
+renderProfilePage Utils{..} tree name selectedPath cdio = renderText $ pageLayout "/profile" $ do
   h1_ "Profile"
   div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
-  genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
+  genericTreeBody tree selectedPath _renderRow _renderSummary name cdio
 
 renderCountPage :: (Show name, Ord name) => String -> Utils a -> IOTree a name -> String
-                -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderCountPage title Utils{..} tree name selectedPath mInc = renderText $ pageLayout (T.pack $ "/" ++ name) $ do
+                -> [Int] -> CDIO -> TL.Text
+renderCountPage title Utils{..} tree name selectedPath cdio = renderText $ pageLayout (T.pack $ "/" ++ name) $ do
   h1_ $ toHtml $ title ++ " Count"
-  genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
+  genericTreeBody tree selectedPath _renderRow _renderSummary name cdio
         
 renderThunkAnalysisPage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
-                        -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderThunkAnalysisPage Utils{..} tree name selectedPath mInc = renderText $ pageLayout "/thunkAnalysis" $ do
+                        -> [Int] -> CDIO -> TL.Text
+renderThunkAnalysisPage Utils{..} tree name selectedPath cdio = renderText $ pageLayout "/thunkAnalysis" $ do
   h1_ "Thunk analysis"
-  genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
+  genericTreeBody tree selectedPath _renderRow _renderSummary name cdio
   
 
 renderFilterSearchPage :: (Show name, Ord name) => IOTree ClosureDetails name -> Suggestions -> [UIFilter] 
-                       -> Version -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath mInc = renderText $ pageLayout "/searchWithFilters" $ do
+                       -> Version -> [Int] -> CDIO -> TL.Text
+renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdio = renderText $ pageLayout "/searchWithFilters" $ do
   h1_ "Results for search with filters"
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
       h3_ "Selection: "
-      ul_ $ detailedSummary renderClosureSummary tree selectedPath mInc
+      ul_ $ detailedSummary renderClosureSummary tree selectedPath cdio
   
     -- Middle column: List of filters
     div_ [ style_ "flex: 1;" ] $ do
@@ -1024,7 +1028,7 @@ svgPath = "tmp/graph.svg"
 genericGet :: IORef AppState
            -> Scotty.RoutePattern
            -> (forall a . Utils a -> IOTree a Name -> String -> [Int] 
-                       -> Maybe (Int, Bool) -> TL.Text)
+                       -> CDIO -> TL.Text)
            -> Scotty.ScottyM ()
 genericGet appStateRef index renderPage = do
   Scotty.get index $ do
@@ -1041,7 +1045,8 @@ genericGet appStateRef index renderPage = do
                  if not filterChanged 
                    then do
                      mInc <- liftIO $ getIncSize closureGetName closureGetSize tree' selectedPath
-                     Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath mInc
+                     imgInfo <- getImg os selectedPath
+                     Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
                    else do
                      let mClosFilter = uiFiltersToFilter (_filters os)
                      cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
@@ -1053,10 +1058,12 @@ genericGet appStateRef index renderPage = do
                          newAppState = updateAppState os (setTM newTM) socket debuggee' state
                      mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
                      liftIO $ writeIORef appStateRef newAppState
-                     Scotty.html $ renderFilterSearchPage tree suggs' (_filters os) (_version os) selectedPath mInc
+                     imgInfo <- getImg os selectedPath
+                     Scotty.html $ renderFilterSearchPage tree suggs' (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
                SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
-                 Scotty.html $ renderPage u tree name selectedPath mInc
+                 imgInfo <- getImg os selectedPath 
+                 Scotty.html $ renderPage u tree name selectedPath (CDIO mInc imgInfo)
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
 
@@ -1125,8 +1132,44 @@ handleImg tree nodeName getName' pageName format' selectedPath = do
         _ <- runGraphviz graph Svg svgPath
         return ()
       svgContent <- liftIO $ BS.readFile svgPath
-      Scotty.html $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
+      Scotty.html $ renderText $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
     _ -> error "Error: failed to find selected node in tree"
+
+
+getImg :: OperationalState -> [Int] -> Scotty.ActionM (Maybe ImgInfo)
+getImg os selectedPath = 
+  case _treeMode os of
+    SavedAndGCRoots -> do
+      let tree = _treeSavedAndGCRoots os
+      handleImg' tree getNodeName closureGetName "connect" closureFormat selectedPath
+    Retainer tree _ -> do
+      handleImg' tree getNodeName closureGetName "searchWithFilters" closureFormat selectedPath
+    SearchedHtml Utils{..} tree pageName -> do
+      let nameFn = maybe "" id . _getName 
+      handleImg' tree (\(IOTreeNode n' _) -> nameFn n') _getName pageName _graphFormat selectedPath
+
+
+handleImg' :: IOTree a name -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> String -> (a -> String) -> [Int] -> Scotty.ActionM (Maybe ImgInfo)
+handleImg' tree nodeName getName'' pageName format' selectedPath = do
+  case getSubTree tree selectedPath of
+    Just subtree@(IOTreeNode n' _) -> do
+      case getName'' n' of
+        Just _ -> do 
+          let getName' = maybe "" id . getName''
+          (expSubtree, capped) <- liftIO $ expandNodeSafe subtree getName'
+          let name = nodeName subtree
+          let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
+          let vizNodes = Set.toList nodes'
+          let graph = buildClosureGraph vizNodes fNodes vizEdges
+          liftIO $ do 
+            createDirectoryIfMissing True "tmp"
+            _ <- runGraphviz graph Svg svgPath
+            return ()
+          svgContent <- liftIO $ BS.readFile svgPath
+          return $ Just $ ImgInfo name capped (TLE.decodeUtf8 svgContent)
+        Nothing -> return Nothing
+    _ -> error "Error: failed to find selected node in tree"
+
 
 closureGetName :: ClosureDetails -> Maybe String
 closureGetName x = case x of ClosureDetails{} -> Just (closureName x); _ -> Nothing
@@ -1297,8 +1340,9 @@ app appStateRef = do
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-            Scotty.html $ renderConnectedPage selectedPath mInc socket debuggee' mode'
-          _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee' mode'
+            imgInfo <- getImg os selectedPath
+            Scotty.html $ renderConnectedPage selectedPath (CDIO mInc imgInfo) socket debuggee' mode'
+          _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing undefined) socket debuggee' mode'
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
@@ -1321,8 +1365,9 @@ app appStateRef = do
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-            Scotty.html $ renderConnectedPage selectedPath mInc socket debuggee' mode'
-          _ -> Scotty.html $ renderConnectedPage selectedPath Nothing socket debuggee' mode'
+            imgInfo <- getImg os selectedPath
+            Scotty.html $ renderConnectedPage selectedPath (CDIO mInc imgInfo) socket debuggee' mode'
+          _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing Nothing) socket debuggee' mode'
   {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
@@ -1449,7 +1494,8 @@ app appStateRef = do
             newTM = SearchedHtml utils tree "profile"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.html $ renderProfilePage utils tree "profile" selectedPath mInc
+        imgInfo <- getImg os selectedPath
+        Scotty.html $ renderProfilePage utils tree "profile" selectedPath (CDIO mInc imgInfo)
       _ -> Scotty.redirect "/"
   {- Downloads the arr_words payload -}
   Scotty.get "/dumpArrWords" $ do
@@ -1510,7 +1556,8 @@ app appStateRef = do
         let (newTM, utils) = countTM words_histogram tree "arrWordsCount"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.html $ renderCountPage "ARR_WORDS" utils tree "arrWordsCount" selectedPath mInc
+        imgInfo <- getImg os selectedPath
+        Scotty.html $ renderCountPage "ARR_WORDS" utils tree "arrWordsCount" selectedPath (CDIO mInc imgInfo)
       _ -> Scotty.redirect "/"
   {- See strings count -}
   genericGet appStateRef "/stringsCount" (renderCountPage "Strings")
@@ -1541,8 +1588,8 @@ app appStateRef = do
         let (newTM, utils) = countTM Nothing tree "stringsCount"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-
-        Scotty.html $ renderCountPage "Strings" utils tree "stringsCount" selectedPath mInc
+        imgInfo <- getImg os selectedPath 
+        Scotty.html $ renderCountPage "Strings" utils tree "stringsCount" selectedPath (CDIO mInc imgInfo)
       _ -> Scotty.redirect "/" 
   {- Thunk analysis -}
   genericGet appStateRef "/thunkAnalysis" renderThunkAnalysisPage
@@ -1560,7 +1607,7 @@ app appStateRef = do
         let newTM = SearchedHtml utils tree "thunkAnalysis"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.html $ renderThunkAnalysisPage utils tree "thunkAnalysis" selectedPath Nothing
+        Scotty.html $ renderThunkAnalysisPage utils tree "thunkAnalysis" selectedPath (CDIO Nothing Nothing)
       _ -> Scotty.redirect "/" 
   {- Take snapshot -}
   Scotty.post "/takeSnapshot" $ do
@@ -1588,9 +1635,10 @@ app appStateRef = do
         let newTM = Retainer tree suggs
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
+        imgInfo <- getImg os selectedPath
         liftIO $ writeIORef appStateRef newAppState
-
-        Scotty.html $ renderFilterSearchPage tree suggs (_filters os) (_version os) selectedPath mInc
+         
+        Scotty.html $ renderFilterSearchPage tree suggs (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
       _ -> Scotty.redirect "/" 
   {- Adds selected filter to list -}
   Scotty.post "/addFilter" $ do

@@ -19,6 +19,7 @@ import Network.Socket as NS
 import Control.Exception (try, SomeException)
 import Web.Scotty.Internal.Types
 import Lucid
+import qualified Data.Text.Lazy as TL
 
 import Lens.Micro.Platform
 import Data.Time
@@ -132,9 +133,20 @@ data ClosureDetails = ClosureDetails
   | CCDetails Text CCPayload
   | LabelNode { _label :: Text } deriving Show
 
+data ImgInfo = ImgInfo
+  { _name :: String 
+  , _capped :: Bool
+  , _svgContent :: TL.Text 
+  }
+
+data CDIO = CDIO 
+  { _mInc :: Maybe (Int, Bool)
+  , _imgInfo :: Maybe ImgInfo
+  }
+
 data Utils a = Utils {
   _renderRow :: a -> Html (),
-  _renderSummary :: a -> [Int] -> Maybe (Int, Bool) -> Html (),
+  _renderSummary :: a -> [Int] -> CDIO -> Html (),
   _graphFormat :: a -> String,
   _dumpArrWords :: a -> Web.Scotty.Internal.Types.ActionT IO (),
   _getName :: a -> Maybe String,
