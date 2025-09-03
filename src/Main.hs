@@ -1041,25 +1041,9 @@ genericGet appStateRef index renderPage = do
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
                Retainer tree' suggs -> do
-                 filterChanged <- filterChangedParam Scotty.queryParam
-                 if not filterChanged 
-                   then do
-                     mInc <- liftIO $ getIncSize closureGetName closureGetSize tree' selectedPath
-                     imgInfo <- getImg os selectedPath
-                     Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
-                   else do
-                     let mClosFilter = uiFiltersToFilter (_filters os)
-                     cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
-                     let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
-                     res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
-                     suggs' <- getSuggestions mClosFilter debuggee'
-                     let tree = mkRetainerTree debuggee' res
-                     let newTM = Retainer tree suggs' 
-                         newAppState = updateAppState os (setTM newTM) socket debuggee' state
-                     mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-                     liftIO $ writeIORef appStateRef newAppState
-                     imgInfo <- getImg os selectedPath
-                     Scotty.html $ renderFilterSearchPage tree suggs' (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
+                 mInc <- liftIO $ getIncSize closureGetName closureGetSize tree' selectedPath
+                 imgInfo <- getImg os selectedPath
+                 Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
                SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
                  imgInfo <- getImg os selectedPath 
@@ -1252,6 +1236,19 @@ reconnect appStateRef = do
       liftIO $ writeIORef appStateRef newAppState
     _ -> return ()
 
+handleFilter appStateRef = do
+  state <- liftIO $ readIORef appStateRef
+  case state ^. majorState of
+    Connected socket debuggee' (PausedMode os) -> do
+      let mClosFilter = uiFiltersToFilter (_filters os)
+      cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
+      let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
+      res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
+      suggs <- getSuggestions mClosFilter debuggee'
+      let tree = mkRetainerTree debuggee' res
+      let newTM = Retainer tree suggs
+          newAppState = updateAppState os (setTM newTM) socket debuggee' state
+      liftIO $ writeIORef appStateRef newAppState
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1360,14 +1357,7 @@ app appStateRef = do
             handleConnect appStateRef state socketParam sockets
                           (\s -> isSocketAlive (_socketLocation s)) debuggeeConnect
       Connected socket debuggee' mode' -> do
-        selectedPath <- selectedParam Scotty.queryParam        
-        case mode' of
-          PausedMode os -> do
-            let tree = _treeSavedAndGCRoots os
-            mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-            imgInfo <- getImg os selectedPath
-            Scotty.html $ renderConnectedPage selectedPath (CDIO mInc imgInfo) socket debuggee' mode'
-          _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing Nothing) socket debuggee' mode'
+        Scotty.redirect "/connect" 
   {- Toggles between socket and snapshot mode when selecting -}
   Scotty.post "/toggle-set-up" $ do
     liftIO $ modifyIORef' appStateRef $ \ state -> 
@@ -1489,13 +1479,11 @@ app appStateRef = do
         let getSize' x = case x of
                            ClosureLine (ClosureDetails _ excSize' _) -> getSize excSize'
                            _ -> 0
-        mInc <- liftIO $ getIncSize getName' getSize' tree selectedPath
         let utils = Utils renderProfileHtml (renderProfileSummary totalStats) profFormat arrDumpProf getName' getSize'
             newTM = SearchedHtml utils tree "profile"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        imgInfo <- getImg os selectedPath
-        Scotty.html $ renderProfilePage utils tree "profile" selectedPath (CDIO mInc imgInfo)
+        Scotty.redirect "/profile"
       _ -> Scotty.redirect "/"
   {- Downloads the arr_words payload -}
   Scotty.get "/dumpArrWords" $ do
@@ -1551,13 +1539,10 @@ app appStateRef = do
           Left _ -> error "Font file missing"
 
         let tree = mkIOTree debuggee' top_closure g_children id
-        mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
-
         let (newTM, utils) = countTM words_histogram tree "arrWordsCount"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        imgInfo <- getImg os selectedPath
-        Scotty.html $ renderCountPage "ARR_WORDS" utils tree "arrWordsCount" selectedPath (CDIO mInc imgInfo)
+        Scotty.redirect "/arrWordsCount"
       _ -> Scotty.redirect "/"
   {- See strings count -}
   genericGet appStateRef "/stringsCount" (renderCountPage "Strings")
@@ -1584,12 +1569,10 @@ app appStateRef = do
             g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
         let tree = mkIOTree debuggee' top_closure g_children id
-        mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
         let (newTM, utils) = countTM Nothing tree "stringsCount"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        imgInfo <- getImg os selectedPath 
-        Scotty.html $ renderCountPage "Strings" utils tree "stringsCount" selectedPath (CDIO mInc imgInfo)
+        Scotty.redirect "/stringsCount"
       _ -> Scotty.redirect "/" 
   {- Thunk analysis -}
   genericGet appStateRef "/thunkAnalysis" renderThunkAnalysisPage
@@ -1607,7 +1590,7 @@ app appStateRef = do
         let newTM = SearchedHtml utils tree "thunkAnalysis"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.html $ renderThunkAnalysisPage utils tree "thunkAnalysis" selectedPath (CDIO Nothing Nothing)
+        Scotty.redirect "/thunkAnalysis"
       _ -> Scotty.redirect "/" 
   {- Take snapshot -}
   Scotty.post "/takeSnapshot" $ do
@@ -1622,24 +1605,15 @@ app appStateRef = do
   {- Search with filters -}
   genericGet appStateRef "/searchWithFilters" undefined
   Scotty.post "/searchWithFilters" $ do
-    state <- liftIO $ readIORef appStateRef
+    handleFilter appStateRef
+    {-state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
       Connected socket debuggee' (PausedMode os) -> do
-        let mClosFilter = uiFiltersToFilter (_filters os)
-        cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
-        let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
-        res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
-        suggs <- getSuggestions mClosFilter debuggee'
-        let tree = mkRetainerTree debuggee' res
-        let newTM = Retainer tree suggs
-            newAppState = updateAppState os (setTM newTM) socket debuggee' state
-        mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-        imgInfo <- getImg os selectedPath
-        liftIO $ writeIORef appStateRef newAppState
-         
-        Scotty.html $ renderFilterSearchPage tree suggs (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
-      _ -> Scotty.redirect "/" 
+        handleFilter appStateRef
+        Scotty.redirect "/searchWithFilters"   
+      _ -> Scotty.redirect "/" -}
+    Scotty.redirect "/searchWithFilters"
   {- Adds selected filter to list -}
   Scotty.post "/addFilter" $ do
     state <- liftIO $ readIORef appStateRef
@@ -1664,6 +1638,7 @@ app appStateRef = do
                           _ -> []
         let newAppState = updateAppState os (addFilters newFilter) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
+        handleFilter appStateRef
         Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/" 
   {- Deletes selected index from filters -}
@@ -1678,6 +1653,7 @@ app appStateRef = do
                                 in as ++ (tail bs)
             newAppState = updateAppState os (setFilters newFilters) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
+        handleFilter appStateRef
         Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/" 
   {- Clears all filters -}
@@ -1687,6 +1663,7 @@ app appStateRef = do
       Connected socket debuggee' (PausedMode os) -> do
         let newAppState = updateAppState os (setFilters []) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
+        handleFilter appStateRef
         Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/"
   {- Set the amount of results from filter searches etc. Input <= 0 -> no limit -}
