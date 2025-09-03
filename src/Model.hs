@@ -20,8 +20,6 @@ import Control.Exception (try, SomeException)
 import Web.Scotty.Internal.Types
 import Lucid
 
-import Data.Maybe (fromMaybe)
-import Data.Sequence as Seq
 import Lens.Micro.Platform
 import Data.Time
 import System.Directory
@@ -30,17 +28,10 @@ import Data.Text(Text, pack)
 import qualified Data.Text as T
 import Text.Read
 
-import Brick.Forms
-import Brick.BChan
-import Brick (EventM, Widget)
-import Brick.Widgets.List
-
 import Namespace
 import Common
 import Lib
 import IOTree
-import Control.Concurrent
-import qualified Graphics.Vty as Vty
 import Data.Int
 import GHC.Debug.Client (ccID)
 import GHC.Debug.Client.Monad (DebugM)
@@ -48,27 +39,24 @@ import GHC.Debug.CostCentres (findAllChildrenOfCC)
 import qualified GHC.Debug.Types as GD
 import qualified GHC.Debug.Types.Version as GD
 
-
-data Event
-  = PollTick  -- Used to perform arbitrary polling based tasks e.g. looking for new debuggees
-  | ProgressMessage Text
-  | ProgressFinished Text NominalDiffTime
-  | AsyncFinished (EventM Name OperationalState ())
-
-
-initialAppState :: BChan Event -> AppState
-initialAppState event = AppState
+initialAppState :: AppState
+initialAppState = AppState
   { _majorState = Setup
       { _setupKind = Socket
-      , _knownDebuggees = list Setup_KnownDebuggeesList [] 1
-      , _knownSnapshots = list Setup_KnownSnapshotsList [] 1
-      },
-    _appChan = event
+      , _knownDebuggees = []
+      , _knownSnapshots = []
+      }
   }
 
 data AppState = AppState
   { _majorState :: MajorState
-  , _appChan    :: BChan Event
+  }
+
+data Suggestions = Suggestions 
+  { _cons :: [String]
+  , _cloNames :: [String]
+  , _cloTypes :: [String]
+  , _ccIds :: [String]
   }
 
 mkSocketInfo :: FilePath -> IO SocketInfo
@@ -112,8 +100,8 @@ data MajorState
   -- | We have not yet connected to a debuggee.
   = Setup
     { _setupKind :: SetupKind
-    , _knownDebuggees :: GenericList Name Seq SocketInfo
-    , _knownSnapshots :: GenericList Name Seq SnapshotInfo
+    , _knownDebuggees :: [SocketInfo] --GenericList Name Seq SocketInfo
+    , _knownSnapshots :: [SnapshotInfo] --GenericList Name Seq SnapshotInfo
     }
 
   -- | Connected to a debuggee
@@ -153,40 +141,9 @@ data Utils a = Utils {
   _getSize :: a -> Int
 }
 
-data TreeMode = SavedAndGCRoots (ClosureDetails -> Widget Name)
-              | Retainer (ClosureDetails -> Widget Name) (IOTree (ClosureDetails) Name)
-              | forall a . Searched (a -> Widget Name) (IOTree a Name)
+data TreeMode = SavedAndGCRoots
+              | Retainer (IOTree (ClosureDetails) Name) Suggestions
               | forall a . SearchedHtml (Utils a) (IOTree a Name) String
-
-
-treeLength :: TreeMode -> Maybe Int
-treeLength (SavedAndGCRoots {}) = Nothing
-treeLength (Retainer _ tree) = Just $ Prelude.length $ getIOTreeRoots tree
-treeLength (Searched _ tree) = Just $ Prelude.length $ getIOTreeRoots tree
-treeLength (SearchedHtml _ tree _) = Just $ Prelude.length $ getIOTreeRoots tree
-
-data FooterMode = FooterInfo
-                | FooterMessage Text
-                | FooterInput FooterInputMode (Form Text () Name)
-
-isFocusedFooter :: FooterMode -> Bool
-isFocusedFooter (FooterInput {}) = True
-isFocusedFooter _ = False
-
-data FooterInputMode = FClosureAddress {runNow :: Bool, invert :: Bool}
-                     | FInfoTableAddress {runNow :: Bool, invert :: Bool}
-                     | FConstructorName {runNow :: Bool, invert :: Bool}
-                     | FClosureName {runNow :: Bool, invert :: Bool}
-                     | FArrWordsSize
-                     | FFilterEras {runNow :: Bool, invert :: Bool}
-                     | FFilterClosureType {invert :: Bool}
-                     | FFilterClosureSize {invert :: Bool}
-                     | FFilterCcId {runNow :: Bool, invert :: Bool}
-                     | FProfile ProfileLevel
-                     | FSnapshot
-                     | FDumpArrWords
-                     | FSetResultSize
-                     deriving Show
 
 -- | Profiling requirement for a command
 data ProfilingReq
@@ -194,75 +151,10 @@ data ProfilingReq
   | ReqErasProfiling
   | NoReq
 
-data Command = Command { commandDescription :: Text
-                       , commandKey :: Maybe Vty.Event
-                       , dispatchCommand :: Debuggee -> EventM Name OperationalState ()
-                       , commandRequiresProfMode :: ProfilingReq
-                       -- ^ The command requires that the debuggee is in a specific
-                       -- profiling mode.
-                       -- For example, we can only filter by eras if the program
-                       -- has era profiling enabled.
-                       }
-
-mkCommand :: Text -> Vty.Event -> EventM Name OperationalState () -> Command
-mkCommand desc ev dispatch = Command desc (Just ev) (\_ -> dispatch) NoReq
-
-mkCommand' :: Text -> EventM Name OperationalState () -> Command
-mkCommand' desc dispatch = Command desc Nothing (\_ -> dispatch) NoReq
-
-mkFilterCmd :: Text -> Vty.Event -> EventM Name OperationalState () -> ProfilingReq -> Command
-mkFilterCmd desc ev dispatch profMode = Command desc (Just ev) (\_ -> dispatch) profMode
-
-mkFilterCmd' :: Text -> EventM Name OperationalState () -> ProfilingReq -> Command
-mkFilterCmd' desc dispatch profMode = Command desc Nothing (\_ -> dispatch) profMode
-
-isCmdEnabled :: GD.Version -> Command -> Bool
-isCmdEnabled debuggeeVersion cmd = case commandRequiresProfMode cmd of
-  NoReq -> True
-  ReqErasProfiling ->
-    Just GD.EraProfiling == GD.v_profiling debuggeeVersion
-  ReqSomeProfiling ->
-    GD.isProfiledRTS debuggeeVersion
-
 inEraMode :: GD.Version -> Bool
 inEraMode ver = Just GD.EraProfiling == GD.v_profiling ver
 inSomeProfMode :: GD.Version -> Bool
 inSomeProfMode ver = GD.isProfiledRTS ver
-
-isCmdDisabled :: GD.Version -> Command -> Bool
-isCmdDisabled v cmd = not $ isCmdEnabled v cmd
-
-data OverlayMode = KeybindingsShown
-                 -- TODO: Abstract the "CommandPicker" into it's own module
-                 | CommandPicker (Form Text () Name) (GenericList Name Seq Command) (Seq Command)
-                 | NoOverlay
-
-
-invertInput :: FooterInputMode -> FooterInputMode
-invertInput x@FClosureAddress{invert} = x{invert = not invert}
-invertInput x@FInfoTableAddress{invert} = x{invert = not invert}
-invertInput x@FConstructorName{invert} = x{invert = not invert}
-invertInput x@FClosureName{invert} = x{invert = not invert}
-invertInput x@FFilterEras{invert} = x{invert = not invert}
-invertInput x@FFilterClosureSize{invert} = x{invert = not invert}
-invertInput x@FFilterClosureType{invert} = x{invert = not invert}
-invertInput x@FFilterCcId{invert} = x{invert = not invert}
-invertInput x = x
-
-formatFooterMode :: FooterInputMode -> Text
-formatFooterMode FClosureAddress{invert} = (if invert then "!" else "") <> "address (0x..): "
-formatFooterMode FInfoTableAddress{invert} = (if invert then "!" else "") <> "info table pointer (0x..): "
-formatFooterMode FConstructorName{invert} = (if invert then "!" else "") <> "constructor name: "
-formatFooterMode FClosureName{invert} = (if invert then "!" else "") <> "closure name: "
-formatFooterMode FFilterEras{invert} = (if invert then "!" else "") <> "era range (<era>/<start-era>-<end-era>): "
-formatFooterMode FFilterClosureSize{invert} = (if invert then "!" else "") <> "closure size (bytes): "
-formatFooterMode FFilterClosureType{invert} = (if invert then "!" else "") <> "closure type: "
-formatFooterMode FFilterCcId{invert} = (if invert then "!" else "") <> "CC Id: "
-formatFooterMode FArrWordsSize = "size (bytes)>= "
-formatFooterMode FDumpArrWords = "dump payload to file: "
-formatFooterMode FSetResultSize = "search result limit (0 for infinity): "
-formatFooterMode FSnapshot = "snapshot name: "
-formatFooterMode (FProfile {}) = "filename: "
 
 data ConnectedMode
   -- | Debuggee is running
@@ -273,21 +165,15 @@ data ConnectedMode
 data RootsOrigin = DefaultRoots [(Text, Ptr)]
                  | SearchedRoots [(Text, Ptr)]
 
-
 currentRoots :: RootsOrigin -> [(Text, Ptr)]
 currentRoots (DefaultRoots cp) = cp
 currentRoots (SearchedRoots cp) = cp
 
 data OperationalState = OperationalState
-    { _running_task :: Maybe ThreadId
-    , _last_run_time :: Maybe (Text, NominalDiffTime)
-    , _treeMode :: TreeMode
-    , _keybindingsMode :: OverlayMode
-    , _footerMode :: FooterMode
+    { _treeMode :: TreeMode
     , _rootsFrom  :: RootsOrigin
     , _treeSavedAndGCRoots :: IOTree (ClosureDetails) Name
     -- ^ Tree corresponding to SavedAndGCRoots mode
-    , _event_chan :: BChan Event
     , _resultSize :: Maybe Int
     , _filters :: [UIFilter]
     , _version :: GD.Version
@@ -356,20 +242,9 @@ showEraRange (EraRange s e)
       | n == maxBound = "∞)"
       | otherwise = show n ++ "]"
 
-osSize :: OperationalState -> Int
-osSize os = fromMaybe (Prelude.length (getIOTreeRoots $ _treeSavedAndGCRoots os)) $ treeLength (_treeMode os)
-
-pauseModeTree :: (forall a . (a -> Widget Name) -> IOTree a Name -> r) -> OperationalState -> r
-pauseModeTree k (OperationalState _ _ mode _kb _footer _from roots _ _ _ _) = case mode of
-  SavedAndGCRoots render -> k render roots
-  Retainer render r -> k render r
-  Searched render r -> k render r
-  _ -> error "Error: web stuff here"
-
 makeLenses ''AppState
 makeLenses ''MajorState
 makeLenses ''ClosureDetails
 makeLenses ''ConnectedMode
 makeLenses ''OperationalState
 makeLenses ''SocketInfo
-makeLenses ''OverlayMode

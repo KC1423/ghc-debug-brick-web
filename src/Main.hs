@@ -25,7 +25,7 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg))
+import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled)
 import Data.GraphViz.Attributes.Complete (Attribute(URL))
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph)
@@ -49,23 +49,12 @@ import Data.Aeson (encode)
 import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC, getSourceInfo)
 import Data.Maybe (catMaybes)
 
-import Brick
-import Brick.BChan
-import Brick.Forms
-import Brick.Widgets.Border
-import Brick.Widgets.Center (centerLayer, hCenter)
-import Brick.Widgets.List
 import Control.Applicative
 import Control.Monad (forM)
 import Control.Monad.IO.Class
-import Control.Monad.Catch (bracket)
-import Control.Concurrent
 import qualified Data.List as List
 import Data.Ord (comparing)
 import qualified Data.Ord as Ord
-import qualified Data.Sequence as Seq
-import qualified Graphics.Vty as Vty
-import Graphics.Vty.Input.Events (Key(..))
 import Lens.Micro.Platform
 import System.Directory
 import System.FilePath
@@ -88,286 +77,21 @@ import IOTree
 import Lib as GD
 import Model
 import Data.ByteUnits
-import Data.Time.Format
-import Data.Time.Clock
 import qualified Numeric
-
--- STATUS: Done
-drawSetup :: Text -> Text -> GenericList Name Seq.Seq SocketInfo -> Widget Name
-drawSetup herald other_herald vals =
-      let nKnownDebuggees = Seq.length $ (vals ^. listElementsL)
-      in mainBorder "ghc-debug" $ vBox
-        [ hBox
-          [ txt $ "Select a " <> herald <> " to debug (" <> pack (show nKnownDebuggees) <> " found):"
-          ]
-        , renderList
-            (\elIsSelected socketPath -> (if elIsSelected then highlighted else id) $ hBox
-                [ txt (socketName socketPath)
-                , txt " - "
-                , txt (renderSocketTime socketPath)
-                ]
-            )
-            True
-            vals
-        , vLimit 1 $ withAttr menuAttr $ hBox [txt $ "(ESC): exit | (TAB): toggle " <> other_herald <> " view", fill ' ']
-        ]
-
--- STATUS: Design
-mainBorder :: Text -> Widget a -> Widget a
-mainBorder title w = -- borderWithLabel (txt title) . padAll 1
-  vLimit 1 (withAttr menuAttr $ hCenter $ fill ' ' <+> txt title <+> fill ' ') <=> w
-
--- STATUS: Design
-myAppDraw :: AppState -> [Widget Name]
-myAppDraw (AppState majorState' _) =
-    case majorState' of
-
-    Setup setupKind' dbgs snaps ->
-      case setupKind' of
-        Socket -> [drawSetup "process" "snapshots" dbgs]
-        Snapshot -> [drawSetup "snapshot" "processes" snaps]
-
-
-    Connected socket _debuggee mode' -> case mode' of
-
-      RunningMode -> [mainBorder ("ghc-debug - Running - " <> socketName socket) $ vBox
-        [ txtWrap "There is nothing you can do until the process is paused by pressing (p) ..."
-        , fill ' '
-        , withAttr menuAttr $ vLimit 1 $ hBox [txt "(p): Pause | (ESC): Exit", fill ' ']
-        ]]
-
-      (PausedMode os@(OperationalState _ last_task treeMode' kbmode fmode _ _ _ _ rfilters debuggeeVersion)) -> let
-           last_task_string =
-            case last_task of
-              Nothing -> ""
-              Just (d,t) -> " - " <> d <> " (" <> T.pack (formatTime defaultTimeLocale "%2Es" t) <> "s)"
-
-        in kbOverlay kbmode debuggeeVersion
-          $ [mainBorder ("ghc-debug - Paused - " <> socketName socket <> last_task_string) $ vBox
-          [ -- Current closure details
-              joinBorders $ (borderWithLabel (txt "Closure Details") $
-              (vLimit 9 $
-                pauseModeTree (\r io -> maybe emptyWidget r (ioTreeSelection io)) os
-                <=> fill ' '))
-              <+> (filterWindow rfilters)
-          , -- Tree
-            joinBorders $ borderWithLabel
-              (txt $ case treeMode' of
-                SavedAndGCRoots {} -> "Root Closures"
-                Retainer {} -> "Retainers"
-                Searched {} -> "Search Results"
-                SearchedHtml {} -> "Search Results"
-              )
-              (pauseModeTree (\_ -> renderIOTree) os)
-          , footer (osSize os) (_resultSize os) fmode
-          ]]
-
-  where
-
-  kbOverlay :: OverlayMode -> GD.Version -> [Widget Name] -> [Widget Name]
-  kbOverlay KeybindingsShown _ ws = centerLayer kbWindow : ws
-  kbOverlay (CommandPicker inp cmd_list _) debuggeeVersion ws  = centerLayer (cpWindow debuggeeVersion inp cmd_list) : ws
-  kbOverlay NoOverlay _ ws = ws
-
-  filterWindow [] = emptyWidget
-  filterWindow xs = borderWithLabel (txt "Filters") $ hLimit 50 $ vBox $ map renderUIFilter xs
-
-  cpWindow :: GD.Version -> Form Text () Name -> GenericList Name Seq.Seq Command -> Widget Name
-  cpWindow debuggeeVersion input cmd_list = hLimit (actual_width + 2) $ vLimit (length commandList + 4) $
-    withAttr menuAttr $
-    borderWithLabel (txt "Command Picker") $ vBox $
-      [ renderForm input
-      , renderList (\elIsSelected -> if elIsSelected then highlighted . renderCommand debuggeeVersion else renderCommand debuggeeVersion) False cmd_list]
-
-  kbWindow :: Widget Name
-  kbWindow =
-    withAttr menuAttr $
-    borderWithLabel (txt "Keybindings") $ vBox $
-      map renderCommandDesc all_keys
-
-  all_keys =
-    [ ("Resume", Just (Vty.EvKey (Vty.KChar 'r') [Vty.MCtrl]))
-    , ("Parent", Just (Vty.EvKey KLeft []))
-    , ("Child", Just (Vty.EvKey KRight []))
-    , ("Command Picker", Just (Vty.EvKey (Vty.KChar 'p') [Vty.MCtrl]))
-    , ("Invert Filter", Just invertFilterEvent)]
-    ++ [(commandDescription cmd, commandKey cmd) | cmd <- F.toList commandList ]
-    ++ [ ("Exit", Just (Vty.EvKey KEsc [])) ]
-
-  maximum_size = maximum (map (T.length . fst) all_keys)
-
-  actual_width = maximum_size + 5  -- 5, maximum width of rendering a key
-                              + 1  -- 1, at least one padding
-
-  renderKey :: Vty.Event -> Text
-  renderKey (Vty.EvKey (KFun n) []) = "(F" <> T.pack (show n) <> ")"
-  renderKey (Vty.EvKey k [Vty.MCtrl]) = "(^" <> renderNormalKey k <> ")"
-  renderKey (Vty.EvKey k [])       = "(" <> renderNormalKey k <> ")"
-  renderKey _k = "()"
-
-  renderNormalKey (KChar c) = T.pack [c]
-  renderNormalKey KEsc = "ESC"
-  renderNormalKey KLeft = "←"
-  renderNormalKey KRight = "→"
-  renderNormalKey _k = "�"
-
-  mayDisableMenuItem debuggeeVersion cmd
-    | isCmdDisabled debuggeeVersion cmd = disabledMenuItem
-    | otherwise = id
-
-  renderCommand debuggeeVersion cmd =
-    mayDisableMenuItem debuggeeVersion cmd $
-    renderCommandDesc (commandDescription cmd, commandKey cmd)
-
-  renderCommandDesc :: (Text, Maybe Vty.Event) -> Widget Name
-  renderCommandDesc (desc, k) = txt (desc <> T.replicate padding " " <> key)
-    where
-      key = maybe mempty renderKey k
-      padding = (actual_width - T.length desc - T.length key)
-
--- STATUS: Done
-renderInfoInfo :: InfoInfo -> [Widget Name]
-renderInfoInfo info' =
-  maybe [] renderSourceInformation (_sourceLocation info')
-    ++ profHeaderInfo
-    -- TODO these aren't actually implemented yet
-    -- , txt $ "Type             "
-    --       <> fromMaybe "" (_closureType =<< cd)
-    -- , txt $ "Constructor      "
-    --       <> fromMaybe "" (_constructor =<< cd)
-  where
-    profHeaderInfo = case _profHeaderInfo info' of
-      Just x ->
-        let plabel = case x of
-              Debug.RetainerHeader{} -> "Retainer info"
-              Debug.LDVWord{} -> "LDV info"
-              Debug.EraWord{} -> "Era"
-              Debug.OtherHeader{} -> "Other"
-        in [labelled plabel $ vLimit 1 (txt $ renderProfHeaderInline x)]
-      Nothing -> []
-
-    renderProfHeaderInline :: ProfHeaderWord -> Text
-    renderProfHeaderInline pinfo =
-      case pinfo of
-        Debug.RetainerHeader {} -> pack (show pinfo) -- This should never be visible
-        Debug.LDVWord {state, creationTime, lastUseTime} ->
-          (if state then "✓" else "✘") <> " created: " <> pack (show creationTime) <> (if state then " last used: " <> pack (show lastUseTime) else "")
-        Debug.EraWord era -> pack (show era)
-        Debug.OtherHeader other -> "Not supported: " <> pack (show other)
-
--- STATUS: Done
-renderSourceInformation :: SourceInformation -> [Widget Name]
-renderSourceInformation (SourceInformation name cty ty label' modu loc) =
-    [ labelled "Name" $ vLimit 1 (str name)
-    , labelled "Closure type" $ vLimit 1 (str (show cty))
-    , labelled "Type" $ vLimit 3 (str ty)
-    , labelled "Label" $ vLimit 1 (str label')
-    , labelled "Module" $ vLimit 1 (str modu)
-    , labelled "Location" $ vLimit 1 (str loc)
-    ]
-
--- STATUS: Design
-labelled :: Text -> Widget Name -> Widget Name
-labelled = labelled' 20
-
--- STATUS: Design
-labelled' :: Int -> Text -> Widget Name -> Widget Name
-labelled' leftSize lbl w =
-  hLimit leftSize  (txtLabel lbl <+> vLimit 1 (fill ' ')) <+> w <+> vLimit 1 (fill ' ')
-
--- STATUS: DONE
-renderUIFilter :: UIFilter -> Widget Name
-renderUIFilter (UIAddressFilter invert x)     = labelled (bool "" "!" invert <> "Closure address") (str (show x))
-renderUIFilter (UIInfoAddressFilter invert x) = labelled (bool "" "!" invert <> "Info table address") (str (show x))
-renderUIFilter (UIConstructorFilter invert x) = labelled (bool "" "!" invert <> "Constructor name") (str x)
-renderUIFilter (UIInfoNameFilter invert x)    = labelled (bool "" "!" invert <> "Constructor name (exact)") (str x)
-renderUIFilter (UIEraFilter invert  x)        = labelled (bool "" "!" invert <> "Era range") (str (showEraRange x))
-renderUIFilter (UISizeFilter invert x)        = labelled (bool "" "!" invert <> "Size (lower bound)") (str (show $ getSize x))
-renderUIFilter (UIClosureTypeFilter invert x) = labelled (bool "" "!" invert <> "Closure type") (str (show x))
-renderUIFilter (UICcId invert x)              = labelled (bool "" "!" invert <> "CC Id") (str (show x))
-
--- STATUS: Done
-renderClosureDetails :: ClosureDetails -> Widget Name
-renderClosureDetails (cd@(ClosureDetails {})) =
-  vLimit 8 $
-  -- viewport Connected_Paused_ClosureDetails Both $
-  vBox $
-    renderInfoInfo (_info cd)
-    ++
-    [ hBox
-      [ txtLabel "Exclusive Size" <+> vSpace <+> renderBytes (GD.getSize $ _excSize cd)
-      ]
-    ]
-renderClosureDetails ((LabelNode n)) = txt n
-renderClosureDetails ((InfoDetails info')) = vLimit 8 $ vBox $ renderInfoInfo info'
-renderClosureDetails (CCSDetails _ _ptr (Debug.CCSPayload{..})) = vLimit 8 $ vBox $
-  [ labelled "ID" $ vLimit 1 (str $ show ccsID)
-  ] ++ renderCCPayload ccsCc
-renderClosureDetails (CCDetails _ c) = vLimit 8 $ vBox $ renderCCPayload c
-
--- STATUS: Done
-renderCCPayload :: CCPayload -> [Widget Name]
-renderCCPayload Debug.CCPayload{..} =
-  [ labelled "Label" $ vLimit 1 (str ccLabel)
-  , labelled "CC ID" $ vLimit 1 (str $ show ccID)
-  , labelled "Module" $ vLimit 1 (str ccMod)
-  , labelled "Location" $ vLimit 1 (str ccLoc)
-  , labelled "Allocation" $ vLimit 1 (str $ show ccMemAlloc)
-  , labelled "Time Ticks" $ vLimit 1 (str $ show ccTimeTicks)
-  , labelled "Is CAF" $ vLimit 1 (str $ show ccIsCaf)
-  ]
-
--- STATUS: Done
-renderBytes :: Real a => a -> Widget n
-renderBytes n =
-  str (getShortHand (getAppropriateUnits (ByteValue (realToFrac n) Bytes)))
-
--- STATUS: Design
-footer :: Int -> Maybe Int -> FooterMode -> Widget Name
-footer n m fmode = vLimit 1 $
- case fmode of
-   FooterMessage t -> withAttr menuAttr $ hBox [txt t, fill ' ']
-   FooterInfo -> withAttr menuAttr $ hBox $ [padRight Brick.Max $ txt "(↑↓): select item | (→): expand | (←): collapse | (^p): command picker | (^g): invert filter | (?): full keybindings"]
-                                         ++ [padLeft (Pad 1) $ str $
-                                               (show n <> " items/" <> maybe "∞" show m <> " max")]
-   FooterInput _im form -> renderForm form
-
--- STATUS: Design
-footerInput :: FooterInputMode -> FooterMode
-footerInput im =
-  FooterInput im (footerInputForm im)
-
--- STATUS: Design
-footerInputForm :: FooterInputMode -> Form Text e Name
-footerInputForm im =
-  newForm [(\w -> txtLabel (formatFooterMode im) <+> forceAttr inputAttr w) @@= editTextField id Footer (Just 1)] ""
 
 -- STATUS: Done (in use)
 updateListFrom :: MonadIO m =>
                         IO FilePath
-                        -> GenericList n Seq.Seq SocketInfo
-                        -> m (GenericList n Seq.Seq SocketInfo)
-updateListFrom dirIO llist = liftIO $ do
+                        -> m [SocketInfo]
+updateListFrom dirIO = liftIO $ do
             dir :: FilePath <- dirIO
             debuggeeSocketFiles :: [FilePath] <- listDirectory dir <|> return []
-
             -- Sort the sockets by the time they have been created, newest
             -- first.
             debuggeeSockets <- List.sortBy (comparing Ord.Down)
                                   <$> mapM (mkSocketInfo . (dir </>)) debuggeeSocketFiles
-
-            let currentSelectedPathMay :: Maybe SocketInfo
-                currentSelectedPathMay = fmap snd (listSelectedElement llist)
-
-                newSelection :: Maybe Int
-                newSelection = do
-                  currentSelectedPath <- currentSelectedPathMay
-                  List.findIndex ((currentSelectedPath ==)) debuggeeSockets
-
-            return $ listReplace
-                      (Seq.fromList debuggeeSockets)
-                      (newSelection <|> (if Prelude.null debuggeeSockets then Nothing else Just 0))
-                      llist
+            
+            return $ debuggeeSockets
 
 -- STATUS: Done (in use superficially, might not actually ever be used)
 getChildren :: Debuggee -> ClosureDetails
@@ -383,7 +107,6 @@ getChildren d (CCSDetails _ _ cp) = do
   references <- zip [0 :: Int ..] <$> ccsReferences d cp
   mapM (\(lbl, cc) -> getClosureDetails d (pack (show lbl)) cc) references
 
-
 -- STATUS: Done (in use)
 fillListItem :: Debuggee
              -> ListItem CCSPtr SrtCont PayloadCont ConstrDescCont StackCont ClosurePtr
@@ -398,147 +121,17 @@ fillListItem _ (ListCC c1) = return $ ListCC c1
 mkIOTree :: Debuggee
          -> [a]
          -> (Debuggee -> a -> IO [a])
-         -> (a -> [Widget Name])
--- -> IO [(String, ListItem SrtCont PayloadCont ConstrDesc StackCont ClosurePtr)])
          -> ([a] -> [a])
          -> IOTree a Name
-mkIOTree debuggee' cs getChildrenGen renderNode sort = ioTree Connected_Paused_ClosureTree
+mkIOTree debuggee' cs getChildrenGen sort = ioTree Connected_Paused_ClosureTree
         (sort cs)
-        (\c -> sort <$> getChildrenGen debuggee' c
---            cDets <- mapM (\(lbl, child) -> getClosureDetails debuggee' manalysis (pack lbl) child) children
---            return (sort cDets)
-        )
-        -- rendering the row
-        (\state selected ctx depth closureDesc ->
-          let
-            body =
-              (if selected then visible . highlighted else id) $
-                hBox $
-                renderNode closureDesc
-          in
-            vdecorate state ctx depth body -- body (T.concat context)
-        )
+        (\c -> sort <$> getChildrenGen debuggee' c)
 
--- STATUS: Design
-era_colors :: [Vty.Color]
-era_colors = [Vty.Color240 n | n <- [17..230]]
-
--- STATUS: Design
-grey :: Vty.Color
-grey = Vty.rgbColor (158 :: Int) 158 158
-
--- STATUS: Design
--- | Draw the tree structure around the row item. Inspired by the
--- 'border' functions in brick.
---
-vdecorate :: RowState -> RowCtx -> [RowCtx] -> Widget n -> Widget n
-vdecorate state ctx depth body =
-  Widget Fixed Fixed $ do
-    c <- getContext
-
-    let decorationWidth = 2 * length depth + 4
-
-    bodyResult <-
-      render $
-      hLimit (c ^. availWidthL - decorationWidth) $
-      vLimit (c ^. availHeightL) $
-      body
-
-    let leftTxt =
-          T.concat $
-          map
-            (\ x -> case x of
-              LastRow -> "  "
-              NotLastRow -> "│ "
-            )
-          (List.reverse depth)
-        leftPart = withAttr treeAttr (vreplicate leftTxt)
-        middleTxt1 =
-          case ctx of
-            LastRow -> "└─"
-            NotLastRow -> "├─"
-        middleTxt1' =
-          case ctx of
-            LastRow -> "  "
-            NotLastRow -> "│ "
-        middleTxt2 =
-          case state of
-            Expanded True -> "● " -- "⋅"
-            Expanded False -> "┐ "
-            Collapsed -> "┄ "
-        middleTxt2' =
-          case state of
-            Expanded True -> "  "
-            Expanded False -> "│ "
-            Collapsed -> "  "
-        middlePart =
-          withAttr treeAttr $
-            (txt middleTxt1 <=> vreplicate middleTxt1')
-            <+> (txt middleTxt2 <=> vreplicate middleTxt2')
-        rightPart = Widget Fixed Fixed $ return bodyResult
-        total = leftPart <+> middlePart <+> rightPart
-
-    render $
-      hLimit (bodyResult ^. imageL . to Vty.imageWidth + decorationWidth) $
-      vLimit (bodyResult ^. imageL . to Vty.imageHeight) $
-      total
-
--- STATUS: Design (unsure)
-vreplicate :: Text -> Widget n
-vreplicate t =
-  Widget Fixed Greedy $ do
-    c <- getContext
-    return $ emptyResult & imageL .~ Vty.vertCat (replicate (c ^. availHeightL) (Vty.text' (c ^. attrL) t))
-{-
-  hBox
-    [ withAttr treeAttr $ Widget Fixed Fixed $ do
-        c <- getContext
-        limitedResult <- render (hLimit (c ^. availWidthL - T.length t) $ vLimit (c ^. availHeightL) $ body)
-        return $ emptyResult & imageL .~ vertCat (replicate (limitedResult ^. imageL . to imageHeight) (text' (c ^. attrL) t))
-    , body
-    ]
-  where
-    bodyWidth =
-      render (hLimit (c ^. availWidthL - (length depth * 2 + 4)) $ vLimit (c ^. availHeightL) $ body)
--}
-
--- STATUS: Done
-renderInlineClosureDesc :: ClosureDetails -> [Widget n]
-renderInlineClosureDesc (LabelNode t) = [txtLabel t]
-renderInlineClosureDesc (InfoDetails info') =
-  [txtLabel (_labelInParent info'), vSpace, txt (_pretty info')]
-renderInlineClosureDesc (CCSDetails clabel _cptr ccspayload) =
-  [ txtLabel clabel, vSpace, txt (prettyCCS ccspayload)]
-renderInlineClosureDesc (CCDetails clabel cc) =
-  [ txtLabel clabel, vSpace, txt (prettyCC cc)]
-renderInlineClosureDesc closureDesc@(ClosureDetails{}) =
-                    [ txtLabel (_labelInParent (_info closureDesc))
-                    , colorBar
-                    , txt $  pack (closureShowAddress (_closure closureDesc))
-                    , vSpace
-                    , txtWrap $ _pretty (_info closureDesc)
-                    ]
-  where
-    colorBar =
-      case colorId of
-        Just {} -> padLeftRight 1 (colorEra (txt " "))
-        Nothing -> vSpace
-
-    colorId = _profHeaderInfo $ _info closureDesc
-    colorEra = case colorId of
-      Just (Debug.EraWord i) -> modifyDefAttr (flip Vty.withBackColor (era_colors !! (1 + (fromIntegral $ abs i) `mod` (length era_colors - 1))))
-      Just (Debug.LDVWord {state}) -> case state of
-                                        -- Used
-                                        True -> modifyDefAttr (flip Vty.withBackColor Vty.green)
-                                        -- Unused
-                                        False -> id
-      _ -> id
-
--- STATUS: Done
+-- STATUS: Done (in use)
 prettyCCS :: GenCCSPayload CCSPtr CCPayload -> Text
 prettyCCS Debug.CCSPayload{ccsCc = cc} = prettyCC cc
 
--- STATUS: Done
+-- STATUS: Done (in use)
 prettyCC :: CCPayload -> Text
 prettyCC Debug.CCPayload{..} =
   T.pack ccLabel <> "   " <> T.pack ccMod <> "   " <> T.pack ccLoc
@@ -598,516 +191,7 @@ getInfoInfo debuggee' label' infoPtr = do
       , _profHeaderInfo = Nothing
       }
 
-
--- STATUS: Design
--- Event handling when the main window has focus
-handleMain :: Debuggee -> Handler Event OperationalState
-handleMain dbg e = do
-  os <- get
-  case e of
-    AppEvent event -> case event of
-            PollTick -> return ()
-            ProgressMessage t -> do
-              put $ footerMessage t os
-            ProgressFinished desc runtime ->
-              put $ os
-                    & running_task .~ Nothing
-                    & last_run_time .~ Just (desc, runtime)
-                    & footerMode .~ FooterInfo
-            AsyncFinished action -> action
-    _ | Nothing <- view running_task os ->
-      case view keybindingsMode os of
-        KeybindingsShown ->
-          case e of
-            VtyEvent (Vty.EvKey _ _) -> put $ os & keybindingsMode .~ NoOverlay
-            _ -> put os
-        CommandPicker form cmd_list orig_cmds -> do
-          -- Overlapping commands are up/down so handle those just via list, otherwise both
-          let handle_form = nestEventM' form (handleFormEvent (() <$ e))
-              handle_list =
-                case e of
-                  VtyEvent vty_e -> nestEventM' cmd_list (handleListEvent vty_e)
-                  _ -> return cmd_list
-              k form' cmd_list' =
-                if (formState form /= formState form') then do
-                    let filter_string = formState form'
-                        new_elems = Seq.filter (\cmd -> T.toLower filter_string `T.isInfixOf` T.toLower (commandDescription cmd )) orig_cmds
-                        cmd_list'' = cmd_list'
-                                          & listElementsL .~ new_elems
-                                          & listSelectedL .~ if Seq.null new_elems then Nothing else Just 0
-                    modify $ keybindingsMode .~ CommandPicker form' cmd_list'' orig_cmds
-                  else
-                    modify $ keybindingsMode .~ CommandPicker form' cmd_list' orig_cmds
-
-
-          case e of
-              VtyEvent (Vty.EvKey Vty.KUp _) -> do
-                list' <- handle_list
-                k form list'
-              VtyEvent (Vty.EvKey Vty.KDown _) -> do
-                list' <- handle_list
-                k form list'
-              VtyEvent (Vty.EvKey Vty.KEsc _) ->
-                put $ os & keybindingsMode .~ NoOverlay
-              VtyEvent (Vty.EvKey Vty.KEnter _) -> do
-                case listSelectedElement cmd_list of
-                  Just (_, cmd)
-                    | isCmdDisabled (_version os) cmd ->
-                      return () -- If the command is disabled, just ignore the key press
-                    | otherwise -> do
-                      modify $ keybindingsMode .~ NoOverlay
-                      dispatchCommand cmd dbg
-                  Nothing  -> return ()
-              _ -> do
-                form' <- handle_form
-                list' <- handle_list
-                k form' list'
-
-
-        NoOverlay -> case view footerMode os of
-          FooterInput fm form -> inputFooterHandler dbg fm form (handleMainWindowEvent dbg) (() <$ e)
-          _ -> handleMainWindowEvent dbg (() <$ e)
-    _ -> return ()
-
--- STATUS: Design
-commandPickerMode :: OverlayMode
-commandPickerMode =
-  CommandPicker
-    (newForm [(\w -> forceAttr inputAttr w) @@= editTextField id Overlay (Just 1)] "")
-    (list CommandPicker_List commandList 1)
-    commandList
-
--- STATUS: Done (unsure, in use)
-savedAndGCRoots :: TreeMode
-savedAndGCRoots = SavedAndGCRoots renderClosureDetails
-
--- ----------------------------------------------------------------------------
--- Commands and Shortcut constants
--- ----------------------------------------------------------------------------
-
--- STATUS: Design
-invertFilterEvent :: Vty.Event
-invertFilterEvent = Vty.EvKey (KChar 'g') [Vty.MCtrl]
-
--- STATUS: Design
-isInvertFilterEvent :: Vty.Event -> Bool
-isInvertFilterEvent = (invertFilterEvent ==)
-
--- STATUS: Design
--- All the commands which we support, these show up in keybindings and also the command picker
-commandList :: Seq.Seq Command
-commandList =
-  [ mkCommand  "Show key bindings"            (Vty.EvKey (KChar '?') []) (modify $ keybindingsMode .~ KeybindingsShown)
-  , mkCommand  "Clear filters"                     (withCtrlKey 'w') (modify $ clearFilters)
-  , Command   "Search with current filters" (Just $ withCtrlKey 'f') searchWithCurrentFilters NoReq
-  , mkCommand  "Set search limit (default 100)"    (withCtrlKey 'l') (setFooterInputMode FSetResultSize)
-  , mkCommand  "Saved/GC Roots"                    (withCtrlKey 's') (modify $ treeMode .~ savedAndGCRoots)
-  , mkCommand  "Find Address"                      (withCtrlKey 'a') (setFooterInputMode (FClosureAddress True False))
-  , mkCommand  "Find Info Table"                   (withCtrlKey 't') (setFooterInputMode (FInfoTableAddress True False))
-  , mkCommand  "Find Retainers"                    (withCtrlKey 'e') (setFooterInputMode (FConstructorName True False))
-  , mkCommand' "Find Retainers (Exact)"                              (setFooterInputMode (FClosureName True False))
-  , mkFilterCmd "Find closures by era"             (withCtrlKey 'v') (setFooterInputMode (FFilterEras True False)) ReqErasProfiling
-  , mkCommand  "Find Retainers of large ARR_WORDS" (withCtrlKey 'u') (setFooterInputMode FArrWordsSize)
-  , mkCommand  "Dump ARR_WORDS payload"            (withCtrlKey 'j') (setFooterInputMode FDumpArrWords)
-  , mkCommand  "Write Profile"                     (withCtrlKey 'b') (setFooterInputMode (FProfile OneLevel))
-  , mkCommand'  "Write Profile (2 level)"          (setFooterInputMode (FProfile TwoLevel))
-  , Command  "Thunk Analysis"                      Nothing thunkAnalysisAction NoReq
-  , mkCommand  "Take Snapshot"                     (withCtrlKey 'x') (setFooterInputMode FSnapshot)
-  , Command "ARR_WORDS Count" Nothing arrWordsAction NoReq
-  , Command "Strings Count" Nothing stringsAction NoReq
-  ] <> addFilterCommands
-  where
-    setFooterInputMode m = modify $ footerMode .~ footerInput m
-
-    addFilterCommands ::  Seq.Seq Command
-    addFilterCommands =
-      [ mkCommand'   "Add filter for address"             (setFooterInputMode (FClosureAddress False False))
-      , mkCommand'   "Add filter for info table ptr"      (setFooterInputMode (FInfoTableAddress False False))
-      , mkCommand'   "Add filter for constructor name"    (setFooterInputMode (FConstructorName False False))
-      , mkCommand'   "Add filter for closure name"        (setFooterInputMode (FClosureName False False))
-      , mkFilterCmd' "Add filter for era"                 (setFooterInputMode (FFilterEras False False)) ReqErasProfiling
-      , mkFilterCmd' "Add filter for cost centre id"      (setFooterInputMode (FFilterCcId False False)) ReqSomeProfiling
-      , mkCommand'   "Add filter for closure size"        (setFooterInputMode (FFilterClosureSize False))
-      , mkCommand'   "Add filter for closure type"        (setFooterInputMode (FFilterClosureType False))
-      , mkCommand'   "Add exclusion for address"          (setFooterInputMode (FClosureAddress False True))
-      , mkCommand'   "Add exclusion for info table ptr"   (setFooterInputMode (FInfoTableAddress False True))
-      , mkCommand'   "Add exclusion for constructor name" (setFooterInputMode (FConstructorName False True))
-      , mkCommand'   "Add exclusion for closure name"     (setFooterInputMode (FClosureName False True))
-      , mkFilterCmd' "Add exclusion for era"              (setFooterInputMode (FFilterEras False True)) ReqErasProfiling
-      , mkFilterCmd' "Add exclusion for cost centre id"   (setFooterInputMode (FFilterCcId False True)) ReqSomeProfiling
-      , mkCommand'   "Add exclusion for closure size"     (setFooterInputMode (FFilterClosureSize True))
-      , mkCommand'   "Add exclusion for closure type"     (setFooterInputMode (FFilterClosureType True))
-      ]
-
-    withCtrlKey char = Vty.EvKey (KChar char) [Vty.MCtrl]
-
--- STATUS: Design
-findCommand :: Vty.Event -> Maybe Command
-findCommand event = do
-  i <- Seq.findIndexL (\cmd -> commandKey cmd == Just event) commandList
-  Seq.lookup i commandList
-
-
--- ----------------------------------------------------------------------------
--- Window Management
--- ----------------------------------------------------------------------------
-
--- STATUS: Design
-handleMainWindowEvent :: Debuggee
-                      -> Handler () OperationalState
-handleMainWindowEvent dbg brickEvent = do
-      os@(OperationalState _ _ treeMode' _kbMode _footerMode _curRoots rootsTree _ _ _ debuggeeVersion) <- get
-      case brickEvent of
-        VtyEvent (Vty.EvKey (KChar 'p') [Vty.MCtrl]) ->
-          put $ os & keybindingsMode .~ commandPickerMode
-
-        -- A generic event
-        VtyEvent event
-          | Just cmd <- findCommand event ->
-            if isCmdDisabled debuggeeVersion cmd
-              then return () -- Command is disabled, don't dispatch the command
-              else dispatchCommand cmd dbg
-
-        -- Navigate the tree of closures
-        VtyEvent event -> case treeMode' of
-          SavedAndGCRoots {} -> do
-            newTree <- handleIOTreeEvent event rootsTree
-            put (os & treeSavedAndGCRoots .~ newTree)
-          Retainer r t -> do
-            newTree <- handleIOTreeEvent event t
-            put (os & treeMode .~ Retainer r newTree)
-
-          Searched r t -> do
-            newTree <- handleIOTreeEvent event t
-            put (os & treeMode .~ Searched r newTree)
-          SearchedHtml{} -> do
-            error "Error: somehow using the web stuff"
-
-        _ -> return ()
-
--- STATUS: Design
-inputFooterHandler :: Debuggee
-                   -> FooterInputMode
-                   -> Form Text () Name
-                   -> Handler () OperationalState
-                   -> Handler () OperationalState
-inputFooterHandler dbg m form _k re@(VtyEvent e) =
-  case e of
-    Vty.EvKey KEsc [] -> modify resetFooter
-    Vty.EvKey KEnter [] -> dispatchFooterInput dbg m form
-    _
-      | isInvertFilterEvent e ->
-          let m' = invertInput m in
-          modify (footerMode .~ (FooterInput m' (updateFormState (formState form) $ footerInputForm m')))
-      | otherwise -> do
-          zoom (lens (const form) (\ os form' -> set footerMode (FooterInput m form') os)) (handleFormEvent re)
-inputFooterHandler _ _ _ k re = k re
-
--- STATUS: Done
-stringsAction :: Debuggee -> EventM n OperationalState ()
-stringsAction dbg = do
-  outside_os <- get
-  -- TODO: Does not honour search limit at all
-  asyncAction "Counting strings" outside_os (stringsAnalysis Nothing dbg) $ \res -> do
-    os <- get
-    --let cmp (k, v) = length k * (S.size v)
-    let sorted_res = maybe id take (_resultSize os) $ Prelude.reverse [(k, S.toList v ) | (k, v) <- (List.sortBy (comparing (S.size . snd)) (M.toList res))]
-
-        top_closure = [CountLine k (length k) (length v) | (k, v) <- sorted_res]
-
-        g_children d (CountLine b _ _) = do
-          let cs = maybe Set.empty id (M.lookup b res)
-          cs' <- run dbg $ forM (S.toList cs) $ \c -> do
-            c' <- GD.dereferenceClosure c
-            return $ ListFullClosure $ Closure c c'
-          children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
-          mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
-        g_children d (FieldLine c) = map FieldLine <$> getChildren d c
-
-        renderHeaderPane (CountLine k l n) = vBox
-          [ labelled "Count     " $ vLimit 1 $ str (show n)
-          , labelled "Size      " $ vLimit 1 $ renderBytes l
-          , labelled "Total Size" $ vLimit 1 $ renderBytes (n * l)
-          , strWrap (take 100 $ show k)
-          ]
-        renderHeaderPane (FieldLine c) = renderClosureDetails c
-
-        tree = mkIOTree dbg top_closure g_children renderArrWordsLines id
-    put (os & resetFooter
-            & treeMode .~ Searched renderHeaderPane tree
-        )
-
-
-
-
--- STATUS: Done
-renderArrWordsLines :: Show a => ArrWordsLine a -> [Widget n]
-renderArrWordsLines (CountLine k l n) = [strLabel (show n), vSpace, renderBytes l, vSpace, strWrap (take 100 $ show k)]
-renderArrWordsLines (FieldLine cd) = renderInlineClosureDesc cd
-
--- STATUS: Done
--- | Render a histogram with n lines which displays the number of elements in each bucket,
--- and how much they contribute to the total size.
-histogram :: Int -> [GD.Size] -> Widget Name
-histogram boxes m =
-  vBox $ map displayLine (bin 0 (map calcPercentage (List.sort m )))
-  where
-    Size maxSize = maximum m
-
-    calcPercentage (Size tot) =
-      (tot, (fromIntegral tot/ fromIntegral maxSize) * 100 :: Double)
-
-    displayLine (l, h, n, tot) =
-      str (show l) <+> txt "%-" <+> str (show h) <+> str "%: " <+> str (show n) <+> str " " <+> renderBytes tot
-
-    step = fromIntegral (ceiling @Double @Int (100 / fromIntegral boxes))
-
-    bin _ [] = []
-    bin k xs = case now of
-                 [] -> bin (k + step) later
-                 _ -> (k, k+step, length now, sum (map fst now)) : bin (k + step) later
-      where
-        (now, later) = span ((<= k + step) . snd) xs
-
--- STATUS: Design
--- | Vertical space used to separate elements on the same line.
---
--- This is standardised for a consistent UI.
-vSpace :: Widget n
-vSpace = txt "   "
-
--- STATUS: Done
-arrWordsAction :: Debuggee -> EventM n OperationalState ()
-arrWordsAction dbg = do
-  outside_os <- get
-  asyncAction "Counting ARR_WORDS" outside_os (arrWordsAnalysis Nothing dbg) $ \res -> do
-    os <- get
-    let all_res = Prelude.reverse [(k, S.toList v ) | (k, v) <- (List.sortBy (comparing (\(k, v) -> fromIntegral (BS.length k) * S.size v)) (M.toList res))]
-
-        display_res = maybe id take (_resultSize os) all_res
-
-        top_closure = [CountLine k (fromIntegral (BS.length k)) (length v) | (k, v) <- display_res]
-
-        !words_histogram = histogram 8 (concatMap (\(k, bs) -> let sz = BS.length k in replicate (length bs) (Size (fromIntegral sz))) all_res)
-
-        g_children d (CountLine b _ _) = do
-          let cs = maybe Set.empty id (M.lookup b res)
-          cs' <- run dbg $ forM (S.toList cs) $ \c -> do
-            c' <- GD.dereferenceClosure c
-            return $ ListFullClosure $ Closure c c'
-          children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
-          mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
-        g_children d (FieldLine c) = map FieldLine <$> getChildren d c
-
-        renderHeaderPane (CountLine b l n) = vBox
-          [ labelled "Count"      $ vLimit 1 $ str (show n)
-          , labelled "Size"       $ vLimit 1 $ renderBytes l
-          , labelled "Total Size" $ vLimit 1 $ renderBytes (n * l)
-          , strWrap (take 100 $ show b)
-          ]
-        renderHeaderPane (FieldLine c) = renderClosureDetails c
-
-        renderWithHistogram c = joinBorders (renderHeaderPane c <+>
-          (padRight (Pad 1) $ (padLeft Brick.Max $ borderWithLabel (txt "Histogram") $ hLimit 100 $ words_histogram)))
-
-        tree = mkIOTree dbg top_closure g_children renderArrWordsLines id
-    put (outside_os & resetFooter
-            & treeMode .~ Searched renderWithHistogram tree
-        )
-
-
--- STATUS: Done
-thunkAnalysisAction :: Debuggee -> EventM n OperationalState ()
-thunkAnalysisAction dbg = do
-  outside_os <- get
-  -- TODO: Does not honour search limit at all
-  asyncAction "Counting thunks" outside_os (thunkAnalysis dbg) $ \res -> do
-    os <- get
-    let top_closure = Prelude.reverse [ ThunkLine k v | (k, v) <- (List.sortBy (comparing (getCount . snd)) (M.toList res))]
-
-        g_children _ (ThunkLine {}) = pure []
-
-        renderHeaderPane (ThunkLine sc c) = vBox $
-          maybe [txt "NoLoc"] renderSourceInformation sc
-          ++ [ strWrap ("Count: " ++ show (getCount c)) ]
-
-        renderInline (ThunkLine msc (Count c)) =
-          [(case msc of
-              Just sc -> strLabel (infoPosition sc)
-              Nothing -> txtLabel "NoLoc"), txt " ", str (show c) ]
-
-
-        tree = mkIOTree dbg top_closure g_children renderInline id
-    put (os & resetFooter
-            & treeMode .~ Searched renderHeaderPane tree
-        )
-
-
--- STATUS: Done
-searchWithCurrentFilters :: Debuggee -> EventM n OperationalState ()
-searchWithCurrentFilters dbg = do
-  outside_os <- get
-  let mClosFilter = uiFiltersToFilter (_filters outside_os)
-  asyncAction "Searching for closures" outside_os (liftIO $ retainersOf (_resultSize outside_os) mClosFilter Nothing dbg) $ \cps -> do
-    os <- get
-    let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
-    res <- liftIO $ mapM (mapM (completeClosureDetails dbg)) cps'
-    let tree = mkRetainerTree dbg res
-    put (os & resetFooter
-            & treeMode .~ Retainer renderClosureDetails tree
-        )
-
--- STATUS: Done (kind of)
-filterOrRun :: Debuggee -> Form Text () Name -> Bool -> (String -> Maybe a) -> (a -> [UIFilter]) -> EventM n OperationalState ()
-filterOrRun dbg form doRun parse createFilter =
-  filterOrRunM dbg form doRun parse (pure . createFilter)
-
--- STATUS: Done (kind of)
-filterOrRunM :: Debuggee -> Form Text () Name -> Bool -> (String -> Maybe a) -> (a -> EventM n OperationalState [UIFilter]) -> EventM n OperationalState ()
-filterOrRunM dbg form doRun parse createFilterM = do
-  case parse (T.unpack (formState form)) of
-    Just x
-      | doRun -> do
-        newFilter <- createFilterM x
-        modify $ setFilters newFilter
-        searchWithCurrentFilters dbg
-      | otherwise -> do
-        newFilter <- createFilterM x
-        modify $ (resetFooter . addFilters newFilter)
-    Nothing -> modify resetFooter
-
-
--- STATUS: Done
-renderProfileLine :: ProfileLine -> [Widget Name]
-renderProfileLine (ClosureLine c) = renderInlineClosureDesc c
-renderProfileLine (ProfileLine k kargs c) =
- [txt (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs kargs), txt " ",  showLine c]
-  where
-    showLine :: CensusStats -> Widget Name
-    showLine (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _) =
-      hBox
-        [ withFontColor totalSizeColor $ str (show s),  vSpace
-        , withFontColor countColor $ str (show n),  vSpace
-        , withFontColor sizeColor $ str (show mn), vSpace
-        , withFontColor avgSizeColor $ str (Numeric.showFFloat @Double (Just 1) (fromIntegral s / fromIntegral n) "")
-        ]
-
-    withFontColor color = modifyDefAttr (flip Vty.withForeColor color)
-
-    totalSizeColor = Vty.RGBColor 0x26 0x83 0xDE
-    countColor = Vty.RGBColor 0xDE 0x66 0x26
-    sizeColor = Vty.RGBColor 0x26 0xDE 0xD7
-    avgSizeColor = Vty.RGBColor 0xAB 0x4D 0xE0
-
-
--- STATUS: Done
--- | What happens when we press enter in footer input mode
-dispatchFooterInput :: Debuggee
-                    -> FooterInputMode
-                    -> Form Text () Name
-                    -> EventM n OperationalState ()
-dispatchFooterInput dbg (FClosureAddress runf invert) form   = filterOrRun dbg form runf readClosurePtr (pure . UIAddressFilter invert)
-dispatchFooterInput dbg (FInfoTableAddress runf invert) form = filterOrRun dbg form runf readInfoTablePtr (pure . UIInfoAddressFilter invert)
-dispatchFooterInput dbg (FConstructorName runf invert) form  = filterOrRun dbg form runf Just (pure . UIConstructorFilter invert)
-dispatchFooterInput dbg (FClosureName runf invert) form      = filterOrRun dbg form runf Just (pure . UIInfoNameFilter invert)
-dispatchFooterInput dbg FArrWordsSize form                  = filterOrRun dbg form True readMaybe (\size -> [UIClosureTypeFilter False Debug.ARR_WORDS, UISizeFilter False size])
-dispatchFooterInput dbg (FFilterEras runf invert) form       = filterOrRun dbg form runf (parseEraRange . T.pack) (pure . UIEraFilter invert)
-dispatchFooterInput dbg (FFilterClosureSize invert) form = filterOrRun dbg form False readMaybe (pure . UISizeFilter invert)
-dispatchFooterInput dbg (FFilterClosureType invert) form = filterOrRun dbg form False readMaybe (pure . UIClosureTypeFilter invert)
-dispatchFooterInput dbg (FFilterCcId runf invert) form = filterOrRun dbg form runf readMaybe (pure . UICcId invert)
-dispatchFooterInput dbg (FProfile lvl) form = do
-   outside_os <- get
-
-   asyncAction "Writing profile" outside_os (profile dbg lvl (T.unpack (formState form))) $ \res -> do
-    os <- get
-    let top_closure = Prelude.reverse [ProfileLine k kargs v  | ((k, kargs), v) <- (List.sortBy (comparing (cssize . snd)) (M.toList res))]
-
-        total_stats = foldMap snd (M.toList res)
-
-        g_children d (ClosureLine c) = map ClosureLine <$> getChildren d c
-        g_children d (ProfileLine _ _ stats) = do
-          let cs = getSamples (sample stats)
-          cs' <- run dbg $ forM cs $ \c -> do
-            c' <- GD.dereferenceClosure c
-            return $ ListFullClosure $ Closure c c'
-          children' <- traverse (traverse (fillListItem d)) $ zipWith (\n c -> (show @Int n, c)) [0..] cs'
-          mapM (\(lbl, child) -> ClosureLine <$> getClosureDetails d (pack lbl) child) children'
-
-        renderHeaderPane (ClosureLine cs) = renderClosureDetails cs
-        renderHeaderPane (ProfileLine k args (CS (Count n) (Size s) (Data.Semigroup.Max (Size mn)) _)) = vBox $
-          [ txtLabel "Label      " <+> vSpace <+> txt (GDP.prettyShortProfileKey k <> GDP.prettyShortProfileKeyArgs args)
-          ]
-          <>
-          (case k of
-            GDP.ProfileConstrDesc desc ->
-              [ txtLabel "Package    " <+> vSpace <+> (txt (GDP.pkgsText desc))
-              , txtLabel "Module     " <+> vSpace <+> (txt (GDP.modlText desc))
-              , txtLabel "Constructor" <+> vSpace <+> (txt (GDP.nameText desc))
-              ]
-            _ -> []
-              )
-          <>
-          [ txtLabel "Count      " <+> vSpace <+> str (show n)
-          , txtLabel "Size       " <+> vSpace <+> renderBytes s
-          , txtLabel "Max        " <+> vSpace <+> renderBytes mn
-          , txtLabel "Average    " <+> vSpace <+> renderBytes @Double (fromIntegral s / fromIntegral n)
-          ]
-
-        renderWithStats l = joinBorders $ renderHeaderPane l <+>
-          (padRight (Pad 1) $ (padLeft Brick.Max $ renderHeaderPane (ProfileLine (GDP.ProfileClosureDesc "Total") GDP.NoArgs total_stats)))
-
-
-        tree :: IOTree ProfileLine Name
-        tree = mkIOTree dbg top_closure g_children renderProfileLine id
-    put (os & resetFooter
-            & treeMode .~ Searched renderWithStats tree
-        )
-dispatchFooterInput _ FDumpArrWords form = do
-   os <- get
-   let act node' = asyncAction_ "dumping ARR_WORDS payload" os $
-        case node' of
-          Just ClosureDetails{_closure = Closure{_closureSized = Debug.unDCS -> Debug.ArrWordsClosure{bytes, arrWords}}} ->
-              BS.writeFile (T.unpack $ formState form) $ arrWordsBS (take (fromIntegral bytes) arrWords)
-          _ -> pure ()
-   case view treeMode os of
-      Retainer _ iotree -> act (ioTreeSelection iotree)
-      SavedAndGCRoots _ -> act (ioTreeSelection (view treeSavedAndGCRoots os))
-      Searched {} -> put (os & footerMessage "Dump for search mode not implemented yet")
-      SearchedHtml {} -> put (os & footerMessage "How are you even seeing this")
-dispatchFooterInput _ FSetResultSize form = do
-   outside_os <- get
-   asyncAction "setting result size" outside_os (pure ()) $ \() -> do
-     os <- get
-     case readMaybe $ T.unpack (formState form) of
-       Just n
-         | n <= 0 -> put (os & resultSize .~ Nothing)
-         | otherwise -> put (os & resultSize .~ (Just n))
-       Nothing -> pure ()
-dispatchFooterInput dbg FSnapshot form = do
-   os <- get
-   asyncAction_ "Taking snapshot" os $ snapshot dbg (T.unpack (formState form))
-
--- STATUS: Design
-asyncAction_ :: Text -> OperationalState -> IO a -> EventM n OperationalState ()
-asyncAction_ desc  os action = asyncAction desc os action (\_ -> return ())
-
--- STATUS: Design
-asyncAction :: Text -> OperationalState -> IO a -> (a -> EventM Name OperationalState ()) -> EventM n OperationalState ()
-asyncAction desc os action final = do
-  tid <- (liftIO $ forkIO $ do
-    writeBChan eventChan (ProgressMessage desc)
-    start <- getCurrentTime
-    res <- action
-    end <- getCurrentTime
-    writeBChan eventChan (AsyncFinished (final res))
-    writeBChan eventChan (ProgressFinished desc (end `diffUTCTime` start)))
-  put $ os & running_task .~ Just tid
-           & resetFooter
-  where
-    eventChan = view event_chan os
-
-
--- STATUS: Done
+-- STATUS: Done (in use)
 mkRetainerTree :: Debuggee -> [[ClosureDetails]] -> IOTree ClosureDetails Name
 mkRetainerTree dbg stacks = do
   let stack_map = [ (cp, rest) | stack <- stacks, Just (cp, rest) <- [List.uncons stack]]
@@ -1126,189 +210,8 @@ mkRetainerTree dbg stacks = do
       -- And if it's not a closure, just do the normal thing
       lookup_c dbg' dc' = getChildren dbg' dc'
 
-  mkIOTree dbg roots lookup_c renderInlineClosureDesc id
+  mkIOTree dbg roots lookup_c id
 
--- STATUS: Design
-resetFooter :: OperationalState -> OperationalState
-resetFooter l = (set footerMode FooterInfo l)
-
--- STATUS: Design
-footerMessage :: Text -> OperationalState -> OperationalState
-footerMessage t l = (set footerMode (FooterMessage t) l)
-
--- STATUS: Design
-myAppStartEvent :: EventM Name AppState ()
-myAppStartEvent = return ()
-
--- STATUS: Design
-myAppAttrMap :: AppState -> AttrMap
-myAppAttrMap _appState =
-  attrMap (Vty.withStyle (Vty.white `on` Vty.black) Vty.dim)
-    [ (menuAttr, Vty.withStyle (Vty.white `on` Vty.blue) Vty.bold)
-    , (inputAttr, Vty.black `on` Vty.green)
-    , (labelAttr, Vty.withStyle (fg Vty.white) Vty.bold)
-    , (highlightAttr, Vty.black `on` Vty.yellow)
-    , (treeAttr, fg Vty.red)
-    , (disabledMenuAttr, Vty.withStyle (grey `on` Vty.blue) Vty.bold)
-    ]
-
--- STATUS: Design
-menuAttr :: AttrName
-menuAttr = attrName "menu"
-
--- STATUS: Design
-inputAttr :: AttrName
-inputAttr = attrName "input"
-
--- STATUS: Design
-labelAttr :: AttrName
-labelAttr = attrName "label"
-
--- STATUS: Design
-treeAttr :: AttrName
-treeAttr = attrName "tree"
-
--- STATUS: Design
-highlightAttr :: AttrName
-highlightAttr = attrName "highlighted"
-
--- STATUS: Design
-disabledMenuAttr :: AttrName
-disabledMenuAttr = attrName "disabledMenu"
-
--- STATUS: Design
-txtLabel :: Text -> Widget n
-txtLabel = withAttr labelAttr . txt
-
--- STATUS: Design
-strLabel :: String -> Widget n
-strLabel = withAttr labelAttr . str
-
--- STATUS: Design
-highlighted :: Widget n -> Widget n
-highlighted = forceAttr highlightAttr
-
--- STATUS: Design
-disabledMenuItem :: Widget n -> Widget n
-disabledMenuItem = forceAttr disabledMenuAttr
-
--- STATUS: Design
-myAppHandleEvent :: BrickEvent Name Event -> EventM Name AppState ()
-myAppHandleEvent brickEvent = do
-  appState@(AppState majorState' eventChan) <- get
-  case brickEvent of
-    _ -> case majorState' of
-      Setup st knownDebuggees' knownSnapshots' -> case brickEvent of
-
-        VtyEvent (Vty.EvKey KEsc _) -> halt
-        VtyEvent event -> case event of
-          -- Connect to the selected debuggee
-          Vty.EvKey (KChar '\t') [] -> do
-            put $ appState & majorState . setupKind %~ toggleSetup
-          Vty.EvKey KEnter _ ->
-            case st of
-              Snapshot
-                | Just (_debuggeeIx, socket) <- listSelectedElement knownSnapshots'
-                -> do
-                  debuggee' <- liftIO $ snapshotConnect (writeBChan eventChan . ProgressMessage) (view socketLocation socket)
-                  put $ appState & majorState .~ Connected
-                        { _debuggeeSocket = socket
-                        , _debuggee = debuggee'
-                        , _mode     = RunningMode  -- TODO should we query the debuggee for this?
-                    }
-              Socket
-                | Just (_debuggeeIx, socket) <- listSelectedElement knownDebuggees'
-                -> do
-                  bracket
-                    (liftIO $ debuggeeConnect (writeBChan eventChan . ProgressMessage) (view socketLocation socket))
-                    (\debuggee' -> liftIO $ resume debuggee')
-                    (\debuggee' ->
-                      put $ appState & majorState .~ Connected
-                        { _debuggeeSocket = socket
-                        , _debuggee = debuggee'
-                        , _mode     = RunningMode  -- TODO should we query the debuggee for this?
-                        })
-              _ -> return ()
-
-          -- Navigate through the list.
-          _ -> do
-            case st of
-              Snapshot -> do
-                zoom (majorState . knownSnapshots) (handleListEventVi handleListEvent event)
-              Socket -> do
-                zoom (majorState . knownDebuggees) (handleListEventVi handleListEvent event)
-
-        AppEvent event -> case event of
-          PollTick -> do
-            -- Poll for debuggees
-            knownDebuggees'' <- updateListFrom socketDirectory knownDebuggees'
-            knownSnapshots'' <- updateListFrom snapshotDirectory knownSnapshots'
-            put $ appState & majorState . knownDebuggees .~ knownDebuggees''
-                                & majorState . knownSnapshots .~ knownSnapshots''
-          _ -> return ()
-        _ -> return ()
-
-      Connected _socket' debuggee' mode' -> case mode' of
-
-        RunningMode -> case brickEvent of
-          -- Exit
-          VtyEvent (Vty.EvKey KEsc _) ->
-            halt
-          -- Pause the debuggee
-          VtyEvent (Vty.EvKey (KChar 'p') []) -> do
-            liftIO $ pause debuggee'
-            ver <- liftIO $ GD.version debuggee'
-            (rootsTree, initRoots) <- liftIO $ mkSavedAndGCRootsIOTree
-            put (appState & majorState . mode .~
-                        PausedMode
-                          (OperationalState Nothing
-                                            Nothing
-                                            savedAndGCRoots
-                                            NoOverlay
-                                            FooterInfo
-                                            (DefaultRoots initRoots)
-                                            rootsTree
-                                            eventChan
-                                            (Just 100)
-                                            []
-                                            ver))
-
-
-
-          _ -> return ()
-
-        PausedMode os -> case brickEvent of
-          _ -> case brickEvent of
-              -- Resume the debuggee if '^r', exit if ESC
-              VtyEvent (Vty.EvKey (KChar 'r') [Vty.MCtrl]) -> do
-                  liftIO $ resume debuggee'
-                  put (appState & majorState . mode .~ RunningMode)
-              VtyEvent (Vty.EvKey (KEsc) _) | NoOverlay <- view keybindingsMode os
-                                            , not (isFocusedFooter (view footerMode os)) -> do
-                  case view running_task os of
-                    Just tid -> do
-                      liftIO $ killThread tid
-                      put $ appState & majorState . mode . pausedMode . running_task .~ Nothing
-                                     & majorState . mode . pausedMode %~ resetFooter
-                    Nothing -> do
-                      liftIO $ resume debuggee'
-                      put $ initialAppState (_appChan appState)
-
-              -- handle any other more local events; mostly key events
-              _ -> liftHandler (majorState . mode) os PausedMode (handleMain debuggee')
-                     (brickEvent)
-
-
-
-        where
-
-        mkSavedAndGCRootsIOTree = do
-          raw_roots <- take 1000 . map ("GC Roots",) <$> GD.rootClosures debuggee'
-          rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
-          raw_saved <- map ("Saved Object",) <$> GD.savedClosures debuggee'
-          savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
-          return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
-                   , fmap toPtr <$> (raw_roots ++ raw_saved))
 
 data ArrWordsLine k = CountLine k Int Int | FieldLine ClosureDetails
 
@@ -1370,13 +273,58 @@ renderBadSocketPage =
     form_ [method_ "get", action_ "/"] $ do
       button_ "Select another socket"
 
+data Tab = Tab { tabName :: Text, tabRoute :: Text }
+
+tabs :: [Tab]
+tabs = 
+  [ Tab "Home" "/connect"
+  , Tab "Profile" "/profile"
+  , Tab "ARR_WORDS Count" "/arrWordsCount"
+  , Tab "Strings Count" "/stringsCount"
+  , Tab "Thunk Analysis" "/thunkAnalysis"
+  , Tab "Search with filters" "/searchWithFilters"
+  ]
+
+pageLayout :: Text -> Html () -> Html ()
+pageLayout currentRoute bodyContent = do
+  head_ $ do
+    title_ "BLAH"
+    style_ navStyle
+  body_ $ do
+    navBar currentRoute
+    div_ [class_ "content"] bodyContent
+
+navBar :: Text -> Html ()
+navBar current = nav_ [class_ "navbar"] $
+  ul_ $ F.forM_ tabs $ \ tab -> do
+    let active = if tabRoute tab == current then "active" else ""
+    li_ [class_ (T.unwords ["tab", active])] $
+      if tabRoute tab == "/profile"
+        then form_ [method_ "post", action_ "/profile", style_ "display:inline"] $ do
+               select_ [name_ "profileLevel", onchange_ "this.form.submit()"] $ do
+                 option_ [value_ "1"] (toHtml ("Level one" :: Text))
+                 option_ [value_ "2"] (toHtml ("Level two" :: Text))
+               button_ [type_ "submit", class_ "tab-button"] "Profile"
+        else form_ [method_ "post", action_ (tabRoute tab), style_ "display:inline"] $
+               button_ [type_ "submit", class_ "tab-button"] (toHtml (tabName tab))
+
+navStyle :: Text
+navStyle = T.unlines
+  [ ".navbar { background: #f0f0f0; padding: 10px; }"
+  , ".tab { display: inline; margin-right: 20px; }"
+  , ".tab-button { background: none; border: none; color: black; font-weight: bold; cursor: pointer; }"
+  , ".active .tab-button { color: blue; } "
+  , ".tab-button:focus { outline: none; }"
+  , ".content { margin-top: 20px }"
+  ]
+
 renderConnectedPage :: [Int] -> Maybe (Int, Bool) -> SocketInfo -> Debuggee -> ConnectedMode -> TL.Text
 renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' of
   RunningMode -> do
     h2_ "Status: running mode. There is nothing you can do until you pause the process."
     form_ [method_ "post", action_ "/pause"] $ 
       button_ "Pause process" 
-  PausedMode os -> do
+  PausedMode os -> pageLayout "/connect" $ do
     let tree = _treeSavedAndGCRoots os
 
     h2_ $ toHtml ("ghc-debug - Paused " <> socketName socket)
@@ -1387,52 +335,24 @@ renderConnectedPage selectedPath mInc socket _ mode' = renderText $ case mode' o
 
     
   
+    h3_ "Selection: "
+    detailedSummary renderClosureSummary tree selectedPath mInc
+    form_ [ method_ "post", action_ "/takeSnapshot"
+          , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+      input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot name", required_ "required"]
+      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+      button_ [type_ "submit"] "Take snapshot"
 
-    div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start; margin-bottom: 0.25rem;" ] $ do
-      -- Left column: Summary and stop/start buttons
-      div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
-        detailedSummary renderClosureSummary tree selectedPath mInc
-        
-      -- Right column: Analysis buttons
-      div_ [ style_ "flex: 1;" ] $ do
-        div_ [ style_ "margin: 0; display: flex; flex-direction: column; gap: 0.25rem;" ] $ do
-          --div_ [style_ "position: absolute; top: 50px; right: 10px;"] $ do
-          form_ [ method_ "post", action_ "/profile"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] (toHtml ("View profile" :: Text))
-            select_ [name_ "profileLevel"] $ do
-              option_ [value_ "1"] (toHtml ("Level one" :: Text))
-              option_ [value_ "2"] (toHtml ("Level two" :: Text))
-          form_ [ method_ "post", action_ "/arrWordsCount"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "View ARR_WORDS count"
-          form_ [ method_ "post", action_ "/stringsCount"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "View strings count"
-          form_ [ method_ "post", action_ "/thunkAnalysis"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "View thunk analysis"
-          form_ [ method_ "post", action_ "/takeSnapshot"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot filename", required_ "required"]
+    form_ [ method_ "post", action_ "/setSearchLimit"
+          , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+      input_ [type_ "text", name_ "index", placeholder_ "Enter search limit", required_ "required"]
 
-            input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-            button_ [type_ "submit"] "Take snapshot"
-          form_ [ method_ "post", action_ "/searchWithFilters"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            button_ [type_ "submit"] "Search with current filters"
-          form_ [ method_ "post", action_ "/setSearchLimit"
-                , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-            input_ [type_ "text", name_ "index", placeholder_ "Enter search limit", required_ "required"]
-
-            input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-            button_ [type_ "submit"] "Limit searches"
-
+      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+      button_ [type_ "submit"] "Limit searches"
 
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
       Retainer {} -> pack "Retainers"
-      Searched {} -> pack "Search Results"
       SearchedHtml {} -> pack "Search Results"
     
     --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
@@ -1583,13 +503,6 @@ renderImgPage returnTo name selectedPath capped svgContent =
         , "});"
         ]
       
-reconnectLink :: HtmlT Identity ()
-reconnectLink = do
-  div_ $ form_ [method_ "post", action_ "/reconnect", style_ "display:inline"] $
-    button_ [ type_ "submit"
-            , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
-            ] "Return to saved objects and GC roots"
-
 genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -> Html ())
                 -> (node -> [Int] -> Maybe (Int, Bool) -> Html ()) -> String -> Maybe (Int, Bool)
                 -> HtmlT Identity ()
@@ -1601,65 +514,40 @@ genericTreeBody tree selectedPath renderRow renderSummary' name mInc = do
 
 renderProfilePage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
                   -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderProfilePage Utils{..} tree name selectedPath mInc = renderText $ do
+renderProfilePage Utils{..} tree name selectedPath mInc = renderText $ pageLayout "/profile" $ do
   h1_ "Profile"
-  reconnectLink
   div_ $ a_ [href_ "/download-profile", download_ "profile_dump", style_ "display: inline-block; margin-top: 1em;" ] "Download"
   genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
 
 renderCountPage :: (Show name, Ord name) => String -> Utils a -> IOTree a name -> String
                 -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderCountPage title Utils{..} tree name selectedPath mInc = renderText $ do
+renderCountPage title Utils{..} tree name selectedPath mInc = renderText $ pageLayout (T.pack $ "/" ++ name) $ do
   h1_ $ toHtml $ title ++ " Count"
-  reconnectLink
   genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
         
 renderThunkAnalysisPage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
                         -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderThunkAnalysisPage Utils{..} tree name selectedPath mInc = renderText $ do
+renderThunkAnalysisPage Utils{..} tree name selectedPath mInc = renderText $ pageLayout "/thunkAnalysis" $ do
   h1_ "Thunk analysis"
-  reconnectLink
   genericTreeBody tree selectedPath _renderRow _renderSummary name mInc
   
 
-renderFilterSearchPage :: (Show name, Ord name) => IOTree ClosureDetails name -> [UIFilter] 
-                       -> [Int] -> Maybe (Int, Bool) -> TL.Text
-renderFilterSearchPage tree filters' selectedPath mInc = renderText $ do
+renderFilterSearchPage :: (Show name, Ord name) => IOTree ClosureDetails name -> Suggestions -> [UIFilter] 
+                       -> Version -> [Int] -> Maybe (Int, Bool) -> TL.Text
+renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath mInc = renderText $ pageLayout "/searchWithFilters" $ do
   h1_ "Results for search with filters"
-  reconnectLink
   div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
     -- Left column: Line summary
     div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
       h3_ "Selection: "
       ul_ $ detailedSummary renderClosureSummary tree selectedPath mInc
   
-    -- Right column: List of filters
+    -- Middle column: List of filters
     div_ [ style_ "flex: 1;" ] $ do
-      form_ [ method_ "post", action_ "/modifyFilters"
-            , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-        h3_ "Filters: "
-        button_ "Modify filters"
-      ul_ [style_ "margin-top: 0.25rem;"] $ plainUIFilters filters'
-  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
-  autoScrollScript
-
-renderModifyFilterPage :: Suggestions -> [UIFilter] -> Version -> TL.Text
-renderModifyFilterPage Suggestions{..} filters' dbgVersion = renderText $ do  
-  h1_ "Modify filters"
-   
-  div_ $ form_ [method_ "post", action_ "/searchWithFilters", style_ "display:inline"] $
-    button_ [ type_ "submit"
-            , style_ "background:none; border:none; padding:0; color:blue; text-decoration:underline; cursor:pointer; font:inherit" 
-            ] "Return to search page"
-
-
-  div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
-    -- Left column: List of filters
-    div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
-      h3_ "Current filters: "
+      h3_ "Filters: "
       ul_ $ mapM_ (uncurry renderUIFilterHtml) (zip filters' [0..])
-    
-    -- Right column: Buttons to modify filters
+
+    -- Right column: Buttons for modifying filters
     div_ [ style_ "flex: 1;" ] $ do
       genFilterButtons "Enter closure address" "Address" 
       genFilterButtons "Enter info table address" "InfoAddress" 
@@ -1674,6 +562,10 @@ renderModifyFilterPage Suggestions{..} filters' dbgVersion = renderText $ do
       form_ [ method_ "post", action_ "/clearFilters"
             , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
         button_ [type_ "submit"] "Clear all filters"    
+
+  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
+  autoScrollScript
+
 
 genFilterButtons :: String -> String -> Html ()
 genFilterButtons = genFilterButtons' Nothing True
@@ -1981,7 +873,8 @@ searchLimitParam :: Data.String.IsString t => ParamGet t (Maybe Int)
 searchLimitParam getParam = readParam "index" getParam readMaybe Nothing
 eLogOutParam :: Data.String.IsString t => ParamGet t Bool
 eLogOutParam getParam = readParam "isJson" getParam (maybe False id . readMaybe) False
-
+filterChangedParam :: Data.String.IsString t => ParamGet t Bool
+filterChangedParam getParam = readParam "filterChanged" getParam (maybe False id . readMaybe) False
 
 buildClosureGraph :: [String] -> [(String, String)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
@@ -2138,18 +1031,32 @@ genericGet appStateRef index renderPage = do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected _ _ mode' ->
+      Connected socket debuggee' mode' ->
         case mode' of
           PausedMode os -> do 
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
-               Retainer _ tree -> do
-                 mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-                 Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
+               Retainer tree' suggs -> do
+                 filterChanged <- filterChangedParam Scotty.queryParam
+                 if not filterChanged 
+                   then do
+                     mInc <- liftIO $ getIncSize closureGetName closureGetSize tree' selectedPath
+                     Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath mInc
+                   else do
+                     let mClosFilter = uiFiltersToFilter (_filters os)
+                     cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
+                     let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
+                     res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
+                     suggs' <- getSuggestions mClosFilter debuggee'
+                     let tree = mkRetainerTree debuggee' res
+                     let newTM = Retainer tree suggs' 
+                         newAppState = updateAppState os (setTM newTM) socket debuggee' state
+                     mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
+                     liftIO $ writeIORef appStateRef newAppState
+                     Scotty.html $ renderFilterSearchPage tree suggs' (_filters os) (_version os) selectedPath mInc
                SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
                  Scotty.html $ renderPage u tree name selectedPath mInc
-               _ -> error "Error: 'Searched' tree mode deprecated"
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
 
@@ -2182,7 +1089,7 @@ handleConnect appStateRef state formValue options isValid' connect = do
       valid <- liftIO $ isValid' socketLike
       if valid
         then do
-          debuggee' <- liftIO $ connect (writeBChan (_appChan state) . ProgressMessage)
+          debuggee' <- liftIO $ connect (\_->return ())--(writeBChan (_appChan state) . ProgressMessage)
                                  (_socketLocation socketLike)
           let newState = state & majorState .~ Connected
                       { _debuggeeSocket = socketLike
@@ -2221,17 +1128,6 @@ handleImg tree nodeName getName' pageName format' selectedPath = do
       Scotty.html $ renderImgPage pageName name selectedPath capped (TLE.decodeUtf8 svgContent)
     _ -> error "Error: failed to find selected node in tree"
 
-handleModifyFilters :: IORef AppState -> ActionT IO ()
-handleModifyFilters appStateRef = do
-  state <- liftIO $ readIORef appStateRef
-  case state ^. majorState of
-    Connected _ debuggee' (PausedMode os) -> do
-      let mClosFilter = uiFiltersToFilter (_filters os)
-      suggs <- getSuggestions mClosFilter debuggee'
-      Scotty.html $ renderModifyFilterPage suggs (_filters os) (_version os)
-    _ -> Scotty.redirect "/"
-
-
 closureGetName :: ClosureDetails -> Maybe String
 closureGetName x = case x of ClosureDetails{} -> Just (closureName x); _ -> Nothing
 closureGetSize :: ClosureDetails -> Int
@@ -2256,13 +1152,6 @@ updateAppState os f socket debuggee' state = newAppState
 setTM :: TreeMode -> OperationalState -> OperationalState
 setTM treeMode' os = os { _treeMode = treeMode' }
 
-
-data Suggestions = Suggestions 
-  { _cons :: [String]
-  , _cloNames :: [String]
-  , _cloTypes :: [String]
-  , _ccIds :: [String]
-  }
 
 getConstructors :: MonadIO m => Debuggee
                 -> [[DebugClosure ccs srt pap ConstrDescCont s b]] -> m [String]
@@ -2311,6 +1200,16 @@ getSuggestions mClosFilter debuggee' = do
   ccIds <- getCcIds debuggee' forSearch
   return $ Suggestions constrs cloNames cloTypes ccIds
 
+reconnect :: MonadIO m => IORef AppState -> m ()
+reconnect appStateRef = do
+  state <- liftIO $ readIORef appStateRef
+  case state ^. majorState of
+    Connected socket debuggee' (PausedMode os) -> do
+      let newAppState = updateAppState os (setTM SavedAndGCRoots) socket debuggee' state
+      liftIO $ writeIORef appStateRef newAppState
+    _ -> return ()
+
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
@@ -2336,11 +1235,11 @@ app appStateRef = do
   Scotty.get "/" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Setup st knownDebuggees' knownSnapshots' -> do
-        newKnownDebuggees <- liftIO $ updateListFrom socketDirectory knownDebuggees'
-        newKnownSnapshots <- liftIO $ updateListFrom snapshotDirectory knownSnapshots'
-        let socketList = F.toList $ newKnownDebuggees ^. listElementsL
-        let snapshotList = F.toList $ newKnownSnapshots ^. listElementsL
+      Setup st _ _ -> do
+        newKnownDebuggees <- liftIO $ updateListFrom socketDirectory
+        newKnownSnapshots <- liftIO $ updateListFrom snapshotDirectory
+        let socketList = F.toList $ newKnownDebuggees
+        let snapshotList = F.toList $ newKnownSnapshots
         liftIO $ writeIORef appStateRef $ state & majorState .~ Setup st newKnownDebuggees newKnownSnapshots
         case st of 
           Socket -> Scotty.html $ renderSocketSelectionPage st socketList
@@ -2403,16 +1302,17 @@ app appStateRef = do
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
+    reconnect appStateRef
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Setup st knownDebuggees' knownSnapshots' -> do
         socketParam <- Scotty.formParam "socket"
         case st of
           Snapshot -> do
-            let snapshots = F.toList (knownSnapshots' ^. listElementsL)
+            let snapshots = F.toList knownSnapshots'
             handleConnect appStateRef state socketParam snapshots (\ _ -> pure True) snapshotConnect 
           Socket -> do
-            let sockets = F.toList (knownDebuggees' ^. listElementsL)
+            let sockets = F.toList knownDebuggees'
             handleConnect appStateRef state socketParam sockets
                           (\s -> isSocketAlive (_socketLocation s)) debuggeeConnect
       Connected socket debuggee' mode' -> do
@@ -2439,14 +1339,10 @@ app appStateRef = do
         ver <- liftIO $ GD.version debuggee'
         (rootsTree, initRoots) <- liftIO $ mkSavedAndGCRootsIOTree debuggee'
         let pausedState = PausedMode $
-                            OperationalState Nothing
-                              Nothing
-                              savedAndGCRoots
-                              NoOverlay
-                              FooterInfo
+                            OperationalState
+                              SavedAndGCRoots
                               (DefaultRoots initRoots)
                               rootsTree
-                              (_appChan state)
                               (Just 100)
                               []
                               ver 
@@ -2468,19 +1364,11 @@ app appStateRef = do
   Scotty.post "/exit" $ do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected _ debuggee' (PausedMode os) -> do
-        case view running_task os of
-          Just tid -> do
-            liftIO $ killThread tid
-            let newAppState = state & majorState . mode . pausedMode . running_task .~ Nothing
-                                    & majorState . mode . pausedMode %~ resetFooter
-            liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect "/connect" 
-          Nothing -> do
-            liftIO $ resume debuggee'
-            let newAppState = initialAppState (_appChan state)
-            liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect "/"
+      Connected _ debuggee' (PausedMode _) -> do
+        liftIO $ resume debuggee'
+        let newAppState = initialAppState
+        liftIO $ writeIORef appStateRef newAppState
+        Scotty.redirect "/"
       _ -> Scotty.redirect "/"
   {- Toggles the expansion state of a path in the tree -}
   Scotty.post "/toggle" $ do
@@ -2492,15 +1380,15 @@ app appStateRef = do
     case state ^. majorState of
       Connected socket debuggee' (PausedMode os) -> do
         case _treeMode os of
-          SavedAndGCRoots _ -> do 
+          SavedAndGCRoots -> do 
             let tree = _treeSavedAndGCRoots os
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
             let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
-          Retainer f tree -> do
+          Retainer tree suggs -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newAppState = updateAppState os (setTM $ Retainer f newTree) socket debuggee' state
+            let newAppState = updateAppState os (setTM $ Retainer newTree suggs) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
           SearchedHtml f tree name -> do
@@ -2508,7 +1396,6 @@ app appStateRef = do
             let newAppState = updateAppState os (setTM $ SearchedHtml f newTree name) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
-          _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- Creates and displays the graph for the selected object -}
   Scotty.post "/img" $ do
@@ -2517,15 +1404,14 @@ app appStateRef = do
     case state ^. majorState of
       Connected _ _ (PausedMode os) ->
         case _treeMode os of
-          SavedAndGCRoots _ -> do
+          SavedAndGCRoots -> do
             let tree = _treeSavedAndGCRoots os
             handleImg tree getNodeName closureName "connect" closureFormat selectedPath
-          Retainer _ tree -> do
+          Retainer tree _ -> do
             handleImg tree getNodeName closureName "searchWithFilters" closureFormat selectedPath
           SearchedHtml Utils{..} tree pageName -> do
             let nameFn = maybe "" id . _getName 
             handleImg tree (\(IOTreeNode n' _) -> nameFn n') nameFn pageName _graphFormat selectedPath
-          _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- View profile (level 1 and 2) -}
   genericGet appStateRef "/profile" renderProfilePage
@@ -2552,7 +1438,7 @@ app appStateRef = do
                 filledC <- fillListItem debuggee' c
                 return (show i, filledC)
               mapM (\(lbl, filledItem) -> ClosureLine <$> getClosureDetails debuggee' (pack lbl) filledItem) filled
-        let tree = mkIOTree debuggee' sortedProfiles gChildren renderProfileLine id
+        let tree = mkIOTree debuggee' sortedProfiles gChildren id
         let profFormat x = case x of ClosureLine c -> closureFormat c; _ -> ""
         let getName' x = case x of ClosureLine c -> Just (closureName c); _ -> Nothing
         let getSize' x = case x of
@@ -2565,15 +1451,6 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef newAppState
         Scotty.html $ renderProfilePage utils tree "profile" selectedPath mInc
       _ -> Scotty.redirect "/"
-  {- Returns to /connect, sets the treeMode -}
-  Scotty.post "/reconnect" $ do
-    state <- liftIO $ readIORef appStateRef
-    case state ^. majorState of
-      Connected socket debuggee' (PausedMode os) -> do
-        let newAppState = updateAppState os (setTM $ SavedAndGCRoots undefined) socket debuggee' state
-        liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/connect"
-      _ -> Scotty.redirect "/"
   {- Downloads the arr_words payload -}
   Scotty.get "/dumpArrWords" $ do
     state <- liftIO $ readIORef appStateRef
@@ -2585,10 +1462,9 @@ app appStateRef = do
                                      Just (IOTreeNode node' _) -> dump node'
                                      Nothing -> error "Error: selected node doesn't exist"
         case _treeMode os of
-          SavedAndGCRoots _ -> handleTree (_treeSavedAndGCRoots os) dumpArrWord
-          Retainer _ tree -> handleTree tree dumpArrWord     
+          SavedAndGCRoots -> handleTree (_treeSavedAndGCRoots os) dumpArrWord
+          Retainer tree _ -> handleTree tree dumpArrWord     
           SearchedHtml Utils{..} tree _ -> handleTree tree _dumpArrWords
-          _ -> error "Error: 'Searched' tree mode deprecated"
       _ -> Scotty.redirect "/"
   {- See arr_words count -}
   genericGet appStateRef "/arrWordsCount" (renderCountPage "ARR_WORDS")
@@ -2628,7 +1504,7 @@ app appStateRef = do
             return ()
           Left _ -> error "Font file missing"
 
-        let tree = mkIOTree debuggee' top_closure g_children renderArrWordsLines id
+        let tree = mkIOTree debuggee' top_closure g_children id
         mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
 
         let (newTM, utils) = countTM words_histogram tree "arrWordsCount"
@@ -2660,7 +1536,7 @@ app appStateRef = do
               mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
             g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
-        let tree = mkIOTree debuggee' top_closure g_children renderArrWordsLines id
+        let tree = mkIOTree debuggee' top_closure g_children id
         mInc <- liftIO $ getIncSize countGetName countGetSize tree selectedPath
         let (newTM, utils) = countTM Nothing tree "stringsCount"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
@@ -2679,7 +1555,7 @@ app appStateRef = do
         let top_closure = Prelude.reverse [ ThunkLine k v | (k, v) <- (List.sortBy (comparing (getCount . snd)) (M.toList thunkMap))]
 
             g_children _ (ThunkLine {}) = pure []
-        let tree = mkIOTree debuggee' top_closure g_children undefined id
+        let tree = mkIOTree debuggee' top_closure g_children id
         let utils = Utils renderThunkAnalysisHtml renderThunkAnalysisSummary (\_->"") arrDumpThunk (\_->Nothing) (\_->0) 
         let newTM = SearchedHtml utils tree "thunkAnalysis"
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
@@ -2707,16 +1583,15 @@ app appStateRef = do
         cps <- liftIO $ retainersOf (_resultSize os) mClosFilter Nothing debuggee'
         let cps' = map (zipWith (\n cp -> (T.pack (show n),cp)) [0 :: Int ..]) cps
         res <- liftIO $ mapM (mapM (completeClosureDetails debuggee')) cps'
+        suggs <- getSuggestions mClosFilter debuggee'
         let tree = mkRetainerTree debuggee' res
-        let newTM = Retainer renderClosureDetails tree
+        let newTM = Retainer tree suggs
             newAppState = updateAppState os (setTM newTM) socket debuggee' state
         mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.html $ renderFilterSearchPage tree (_filters os) selectedPath mInc
+
+        Scotty.html $ renderFilterSearchPage tree suggs (_filters os) (_version os) selectedPath mInc
       _ -> Scotty.redirect "/" 
-  {- Modify filters -}
-  Scotty.get "/modifyFilters" (handleModifyFilters appStateRef)
-  Scotty.post "/modifyFilters" (handleModifyFilters appStateRef)
   {- Adds selected filter to list -}
   Scotty.post "/addFilter" $ do
     state <- liftIO $ readIORef appStateRef
@@ -2741,7 +1616,7 @@ app appStateRef = do
                           _ -> []
         let newAppState = updateAppState os (addFilters newFilter) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/modifyFilters"
+        Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/" 
   {- Deletes selected index from filters -}
   Scotty.post "/deleteFilter" $ do
@@ -2755,7 +1630,7 @@ app appStateRef = do
                                 in as ++ (tail bs)
             newAppState = updateAppState os (setFilters newFilters) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/modifyFilters"
+        Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/" 
   {- Clears all filters -}
   Scotty.post "/clearFilters" $ do
@@ -2764,7 +1639,7 @@ app appStateRef = do
       Connected socket debuggee' (PausedMode os) -> do
         let newAppState = updateAppState os (setFilters []) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/modifyFilters"
+        Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/"
   {- Set the amount of results from filter searches etc. Input <= 0 -> no limit -}
   Scotty.post "/setSearchLimit" $ do
@@ -2787,13 +1662,12 @@ app appStateRef = do
           rootClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_roots
           raw_saved <- map ("Saved Object",) <$> GD.savedClosures debuggee'
           savedClosures' <- liftIO $ mapM (completeClosureDetails debuggee') raw_saved
-          return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren renderInlineClosureDesc id
+          return $ (mkIOTree debuggee' (savedClosures' ++ rootClosures') getChildren id
                    , fmap toPtr <$> (raw_roots ++ raw_saved))
 
 
 main :: IO ()
 main = do
-  eventChan <- newBChan 10
-  let initial = initialAppState eventChan
+  let initial = initialAppState
   appStateRef <- newIORef initial
   Scotty.scotty 3000 (app appStateRef)
