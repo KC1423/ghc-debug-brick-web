@@ -772,14 +772,6 @@ renderCC Debug.CCPayload{..} = do
   summaryEntry "Time ticks" (show ccTimeTicks)
   summaryEntry "Is CAF" (show ccIsCaf)
 
-getIncSize :: (a -> Maybe String) -> (a -> Int) -> IOTree a name -> [Int] -> IO (Maybe (Int, Bool))
-getIncSize getName' getSize' tree selectedPath =
-  case getSubTree tree selectedPath of
-    Nothing -> return Nothing
-    Just subtree -> do
-      (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName')
-      return $ Just (getClosureIncSize getName' getSize' Set.empty expSubTree, capped)
-  
 getClosureIncSize :: (a -> Maybe String) -> (a -> Int) -> Set.Set String -> IOTreeNode a name -> Int
 getClosureIncSize getName' getSize' seen' node' = fst (go seen' node')
   where
@@ -1083,19 +1075,13 @@ genericGet appStateRef index renderPage = do
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
                Retainer tree' suggs -> do
-                 mInc <- liftIO $ getIncSize closureGetName closureGetSize tree' selectedPath
-                 imgInfo <- getImg os selectedPath
-
-                 {-imgInfo <- handleImg tree' getNodeName closureGetName closureFormat selectedPath-}
-                 Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
+                 cdio <- getCDIO tree' selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+                 Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath cdio
                SearchedHtml u@(Utils{..}) tree name -> do
-                 mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
-                 imgInfo <- getImg os selectedPath 
-                 {-let nameFn = maybe "" id . _getName 
-                 imgInfo <- handleImg tree (\(IOTreeNode n' _) -> nameFn n') _getName _graphFormat selectedPath
--}
-
-                 Scotty.html $ renderPage u tree name selectedPath (CDIO mInc imgInfo)
+                 let nameFn = maybe "" id . _getName 
+                 cdio <- getCDIO tree selectedPath _getName _getSize
+                         (\(IOTreeNode n' _) -> nameFn n') _graphFormat
+                 Scotty.html $ renderPage u tree name selectedPath cdio
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
 
@@ -1148,45 +1134,34 @@ closureName (LabelNode l) = T.unpack l
 closureName (CCSDetails clabel _ _) = T.unpack $ clabel
 closureName (CCDetails clabel _) = T.unpack $ clabel
 
-
-getImg :: OperationalState -> [Int] -> Scotty.ActionM (Maybe ImgInfo)
-getImg os selectedPath = 
-  case _treeMode os of
-    SavedAndGCRoots -> do
-      let tree = _treeSavedAndGCRoots os
-      handleImg tree getNodeName closureGetName closureFormat selectedPath
-    Retainer tree _ -> do
-      handleImg tree getNodeName closureGetName closureFormat selectedPath
-    SearchedHtml Utils{..} tree _ -> do
-      let nameFn = maybe "" id . _getName 
-      handleImg tree (\(IOTreeNode n' _) -> nameFn n') _getName _graphFormat selectedPath
-
-
-handleImg :: IOTree a name -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> (a -> String) -> [Int] -> Scotty.ActionM (Maybe ImgInfo)
-handleImg tree nodeName getName'' format' selectedPath = do
+getCDIO tree selectedPath getName' getSize' nodeName format' = 
   case getSubTree tree selectedPath of
-    Just subtree@(IOTreeNode n' _) -> do
-      case getName'' n' of
-        Just _ -> do 
-          hasGV <- liftIO isGraphvizInstalled
-          if not hasGV
-            then return $ Just $ ImgInfo undefined undefined undefined False
-            else do
-              let getName' = maybe "" id . getName''
-              (expSubtree, capped) <- liftIO $ expandNodeSafe subtree getName'
-              let name = nodeName subtree
-              let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
-              let vizNodes = Set.toList nodes'
-              let graph = buildClosureGraph vizNodes fNodes vizEdges
-              liftIO $ do 
-                createDirectoryIfMissing True "tmp"
-                _ <- runGraphviz graph Svg svgPath
-                return ()
-              svgContent <- liftIO $ BS.readFile svgPath
-              return $ Just $ ImgInfo name capped (TLE.decodeUtf8 svgContent) True
-        Nothing -> return Nothing
-    _ -> error "Error: failed to find selected node in tree"
+    Nothing -> return $ CDIO Nothing Nothing
+    Just subtree -> do
+      (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName')
+      let mInc = Just (getClosureIncSize getName' getSize' Set.empty expSubTree, capped)
+      hasGV <- liftIO $ isGraphvizInstalled
+      if not hasGV then return $ CDIO mInc (Just $ ImgInfo { _hasGV = False })
+      else do
+        imgInfo <- handleImg expSubTree capped nodeName getName' format'
+        return $ CDIO mInc imgInfo
 
+handleImg :: IOTreeNode a name -> Bool -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> (a -> String) -> Scotty.ActionM (Maybe ImgInfo)
+handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
+  case getName'' n' of
+    Just _ -> do 
+      let getName' = maybe "" id . getName''
+      let name = nodeName expSubtree
+      let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
+      let vizNodes = Set.toList nodes'
+      let graph = buildClosureGraph vizNodes fNodes vizEdges
+      liftIO $ do 
+        createDirectoryIfMissing True "tmp"
+        _ <- runGraphviz graph Svg svgPath
+        return ()
+      svgContent <- liftIO $ BS.readFile svgPath
+      return $ Just $ ImgInfo name capped (TLE.decodeUtf8 svgContent) True
+    Nothing -> return Nothing
 
 closureGetName :: ClosureDetails -> Maybe String
 closureGetName x = case x of ClosureDetails{} -> Just (closureName x); _ -> Nothing
@@ -1370,11 +1345,8 @@ app appStateRef = do
         case mode' of 
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
-            mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
-            imgInfo <- getImg os selectedPath
-            --imgInfo <- handleImg tree getNodeName closureGetName closureFormat selectedPath
-
-            Scotty.html $ renderConnectedPage selectedPath (CDIO mInc imgInfo) socket debuggee' mode'
+            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+            Scotty.html $ renderConnectedPage selectedPath cdio socket debuggee' mode'
           _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing undefined) socket debuggee' mode'
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
