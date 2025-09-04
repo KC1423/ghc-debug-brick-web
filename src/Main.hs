@@ -1070,8 +1070,7 @@ svgPath = "tmp/graph.svg"
 
 genericGet :: IORef AppState
            -> Scotty.RoutePattern
-           -> (forall a . Utils a -> IOTree a Name -> String -> [Int] 
-                       -> CDIO -> TL.Text)
+           -> (forall a . Utils a -> IOTree a Name -> String -> [Int] -> CDIO -> TL.Text)
            -> Scotty.ScottyM ()
 genericGet appStateRef index renderPage = do
   Scotty.get index $ do
@@ -1086,10 +1085,16 @@ genericGet appStateRef index renderPage = do
                Retainer tree' suggs -> do
                  mInc <- liftIO $ getIncSize closureGetName closureGetSize tree' selectedPath
                  imgInfo <- getImg os selectedPath
+
+                 {-imgInfo <- handleImg tree' getNodeName closureGetName closureFormat selectedPath-}
                  Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath (CDIO mInc imgInfo)
                SearchedHtml u@(Utils{..}) tree name -> do
                  mInc <- liftIO $ getIncSize _getName _getSize tree selectedPath
                  imgInfo <- getImg os selectedPath 
+                 {-let nameFn = maybe "" id . _getName 
+                 imgInfo <- handleImg tree (\(IOTreeNode n' _) -> nameFn n') _getName _graphFormat selectedPath
+-}
+
                  Scotty.html $ renderPage u tree name selectedPath (CDIO mInc imgInfo)
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
@@ -1123,8 +1128,7 @@ handleConnect appStateRef state formValue options isValid' connect = do
       valid <- liftIO $ isValid' socketLike
       if valid
         then do
-          debuggee' <- liftIO $ connect (\_->return ())--(writeBChan (_appChan state) . ProgressMessage)
-                                 (_socketLocation socketLike)
+          debuggee' <- liftIO $ connect (\_->return ()) (_socketLocation socketLike)
           let newState = state & majorState .~ Connected
                       { _debuggeeSocket = socketLike
                       , _debuggee = debuggee'
@@ -1368,6 +1372,8 @@ app appStateRef = do
             let tree = _treeSavedAndGCRoots os
             mInc <- liftIO $ getIncSize closureGetName closureGetSize tree selectedPath
             imgInfo <- getImg os selectedPath
+            --imgInfo <- handleImg tree getNodeName closureGetName closureFormat selectedPath
+
             Scotty.html $ renderConnectedPage selectedPath (CDIO mInc imgInfo) socket debuggee' mode'
           _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing undefined) socket debuggee' mode'
       _ -> Scotty.redirect "/"
@@ -1616,13 +1622,6 @@ app appStateRef = do
   genericGet appStateRef "/searchWithFilters" undefined
   Scotty.post "/searchWithFilters" $ do
     handleFilter appStateRef
-    {-state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
-    case state ^. majorState of
-      Connected socket debuggee' (PausedMode os) -> do
-        handleFilter appStateRef
-        Scotty.redirect "/searchWithFilters"   
-      _ -> Scotty.redirect "/" -}
     Scotty.redirect "/searchWithFilters"
   {- Adds selected filter to list -}
   Scotty.post "/addFilter" $ do
