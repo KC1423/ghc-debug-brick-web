@@ -486,7 +486,12 @@ renderMImg :: CDIO -> Html ()
 renderMImg CDIO {..} = 
   case _imgInfo of
     Nothing -> mempty
-    Just ImgInfo{..} -> renderImgPage _name _capped _svgContent
+    Just ImgInfo{..} ->
+      if not _hasGV 
+        then do
+          h3_ "You don't have Graphviz installed, which is required to display visualisations of closures" 
+          p_ "Run sudo apt install graphviz"
+        else renderImgPage _name _capped _svgContent
 
 renderImgPage :: String -> Bool -> TL.Text -> Html () 
 renderImgPage name capped svgContent = do
@@ -1159,18 +1164,22 @@ handleImg tree nodeName getName'' format' selectedPath = do
     Just subtree@(IOTreeNode n' _) -> do
       case getName'' n' of
         Just _ -> do 
-          let getName' = maybe "" id . getName''
-          (expSubtree, capped) <- liftIO $ expandNodeSafe subtree getName'
-          let name = nodeName subtree
-          let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
-          let vizNodes = Set.toList nodes'
-          let graph = buildClosureGraph vizNodes fNodes vizEdges
-          liftIO $ do 
-            createDirectoryIfMissing True "tmp"
-            _ <- runGraphviz graph Svg svgPath
-            return ()
-          svgContent <- liftIO $ BS.readFile svgPath
-          return $ Just $ ImgInfo name capped (TLE.decodeUtf8 svgContent)
+          hasGV <- liftIO isGraphvizInstalled
+          if not hasGV
+            then return $ Just $ ImgInfo undefined undefined undefined False
+            else do
+              let getName' = maybe "" id . getName''
+              (expSubtree, capped) <- liftIO $ expandNodeSafe subtree getName'
+              let name = nodeName subtree
+              let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
+              let vizNodes = Set.toList nodes'
+              let graph = buildClosureGraph vizNodes fNodes vizEdges
+              liftIO $ do 
+                createDirectoryIfMissing True "tmp"
+                _ <- runGraphviz graph Svg svgPath
+                return ()
+              svgContent <- liftIO $ BS.readFile svgPath
+              return $ Just $ ImgInfo name capped (TLE.decodeUtf8 svgContent) True
         Nothing -> return Nothing
     _ -> error "Error: failed to find selected node in tree"
 

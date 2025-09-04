@@ -137,6 +137,7 @@ data ImgInfo = ImgInfo
   { _name :: String 
   , _capped :: Bool
   , _svgContent :: TL.Text 
+  , _hasGV :: Bool
   }
 
 data CDIO = CDIO 
