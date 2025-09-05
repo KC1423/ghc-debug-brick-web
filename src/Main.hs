@@ -491,62 +491,80 @@ renderMImg CDIO {..} =
         then do
           h3_ "You don't have Graphviz installed, which is required to display visualisations of closures" 
           p_ "Run sudo apt install graphviz"
-        else renderImgPage _name _capped _svgContent
+        else renderImgPage _name _capped
 
-renderImgPage :: String -> Bool -> TL.Text -> Html () 
-renderImgPage name capped svgContent = do
+renderImgPage :: String -> Bool -> Html () 
+renderImgPage name capped = do
   div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
     h3_ $ toHtml $ "Visualisation of " ++ name
     button_ [ id_ "toggleButton", onclick_ "toggleDiv()" ] "Show"
   if capped then p_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
   div_ [ id_ "toggleDiv", style_ "display: none;" ] $ do 
     body_ $ do
-      div_ $ a_ [ href_ "/graph"
+      div_ $ a_ [ href_ "/graph.svg"
+                , id_ "download-link"
                 , download_ "graph.svg"
-                , style_ "display: inline-block; margin-top: 1em;"
+                , style_ "display: none; margin-top: 1em;"
                 ] "Download SVG"
-      --img_ [src_ "/graph", alt_ "Dynamic Graph", style_ "max-width: 100%; height: auto;"]
       -- this code renders the svg with JS so it is interactive
       div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; max-width: 800px; height: 80vh; overflow: hidden;"] $ 
-        toHtmlRaw svgContent
+        mempty
     script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
     script_ $ mconcat
-      [ "const element = document.querySelector('#svg-container svg');"
-      , "panzoom(element, {"
-      , "  bounds: true,"
-      , "  boundsPadding: 0.1,"
-      , "  zoomDoubleClickSpeed: 1,"
-      , "  maxZoom: 10,"
-      , "  minZoom: 0.1"
-      , "});"
+      [ "let svgLoaded = false;\n"
+      , "function fetchAndRender() {"
+      , "  if (!svgLoaded) {\n"
+      , "    const container = document.getElementById('svg-container');\n"
+      , "    container.innerHTML = '<p style=\"font-style: italic; color: #555; \">Loading graph...</p>';"
+      , "    fetch('/graph')\n"
+      , "      .then(res => res.text())\n"
+      , "      .then(svg => {\n"
+      , "        document.getElementById('svg-container').innerHTML = svg;\n"
+      , "        document.getElementById('download-link').style.display = 'inline-block';\n"
+      , "        const element = document.querySelector('#svg-container svg');\n"
+      , "        panzoom(element, {\n"
+      , "          bounds: true,\n"
+      , "          boundsPadding: 0.1,\n"
+      , "          zoomDoubleClickSpeed: 1,\n"
+      , "          maxZoom: 10,\n"
+      , "          minZoom: 0.1\n"
+      , "        });\n"
+      , "        svgLoaded = true;\n"
+      , "      })\n"
+      , "      .catch(err => {\n"
+      , "        console.error('Failed to load graph:', err);\n"
+      , "        document.getElementById('svg-container').innerText = 'Failed to load graph.';\n"
+      , "      });\n"
+      , "  }"
+      , "}"
+      , "function toggleDiv() {\n"
+      , "  const div = document.getElementById('toggleDiv');\n"
+      , "  const btn = document.getElementById('toggleButton');\n"
+      , "  if (div.style.display === 'none') {\n"
+      , "    div.style.display = 'block';\n"
+      , "    btn.textContent = 'Hide';\n"
+      , "    localStorage.setItem('toggleDivState', 'shown');\n"
+      , "    fetchAndRender();"
+      , "  } else {\n"
+      , "    div.style.display = 'none';\n"
+      , "    btn.textContent = 'Show';\n"
+      , "    localStorage.setItem('toggleDivState', 'hidden');\n"
+      , "  }\n"
+      , "}\n"
+      , "document.addEventListener('DOMContentLoaded', function() {\n"
+      , "  const div = document.getElementById('toggleDiv');\n"
+      , "  const btn = document.getElementById('toggleButton');\n"
+      , "  const state = localStorage.getItem('toggleDivState');\n"
+      , "  if (state === 'shown') {\n"
+      , "    div.style.display = 'block';\n"
+      , "    btn.textContent = 'Hide';\n"
+      , "    fetchAndRender();"
+      , "  } else {\n"
+      , "    div.style.display = 'none';\n"
+      , "    btn.textContent = 'Show';\n"
+      , "  }\n"
+      , "});\n"
       ]
-    script_ $ mconcat
-     [ "document.addEventListener('DOMContentLoaded', function() {"
-     , "  var div = document.getElementById('toggleDiv');"
-     , "  var btn = document.getElementById('toggleButton');"
-     , "  var state = localStorage.getItem('toggleDivState');"
-     , "  if (state === 'shown') {"
-     , "    div.style.display = 'block';"
-     , "    btn.textContent = 'Hide';"
-     , "  } else {"
-     , "    div.style.display = 'none';"
-     , "    btn.textContent = 'Show';"
-     , "  }"
-     , "});"
-     , "function toggleDiv() {\n"
-     , "  var div = document.getElementById('toggleDiv');"
-     , "  var btn = document.getElementById('toggleButton');"
-     , "  if (div.style.display === 'none') {"
-     , "    div.style.display = 'block';"
-     , "    btn.textContent = 'Hide';"
-     , "    localStorage.setItem('toggleDivState', 'shown');"
-     , "  } else {"
-     , "    div.style.display = 'none';"
-     , "    btn.textContent = 'Show';"
-     , "    localStorage.setItem('toggleDivState', 'hidden');"
-     , "  }"
-     , "}"
-     ]
       
 genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -> Html ())
                 -> (node -> [Int] -> CDIO -> Html ()) -> String -> CDIO
@@ -1076,11 +1094,14 @@ genericGet appStateRef index renderPage = do
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
                Retainer tree' suggs -> do
                  cdio <- getCDIO tree' selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+                 updateImg appStateRef cdio
                  Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath cdio
                SearchedHtml u@(Utils{..}) tree name -> do
                  let nameFn = maybe "" id . _getName 
                  cdio <- getCDIO tree selectedPath _getName _getSize
                          (\(IOTreeNode n' _) -> nameFn n') _graphFormat
+                 
+                 updateImg appStateRef cdio
                  Scotty.html $ renderPage u tree name selectedPath cdio
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
@@ -1134,6 +1155,17 @@ closureName (LabelNode l) = T.unpack l
 closureName (CCSDetails clabel _ _) = T.unpack $ clabel
 closureName (CCDetails clabel _) = T.unpack $ clabel
 
+updateImg appStateRef (CDIO _ (Just ImgInfo{..})) = do
+  state <- liftIO $ readIORef appStateRef
+  case state ^. majorState of
+    Connected s d (PausedMode os) -> do
+      let newOs = os { _genSvg = _svgContent }
+      let newState = state { _majorState = Connected s d (PausedMode newOs) } 
+      liftIO $ writeIORef appStateRef newState
+      return ()
+    _ -> return ()
+updateImg _ _ = return ()
+
 getCDIO tree selectedPath getName' getSize' nodeName format' = 
   case getSubTree tree selectedPath of
     Nothing -> return $ CDIO Nothing Nothing
@@ -1155,12 +1187,12 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
       let graph = buildClosureGraph vizNodes fNodes vizEdges
-      liftIO $ do 
-        createDirectoryIfMissing True "tmp"
-        _ <- runGraphviz graph Svg svgPath
-        return ()
-      svgContent <- liftIO $ BS.readFile svgPath
-      return $ Just $ ImgInfo name capped (TLE.decodeUtf8 svgContent) True
+      let svgContent = liftIO $ do 
+                         createDirectoryIfMissing True "tmp"
+                         _ <- runGraphviz graph Svg svgPath
+                         svg' <- liftIO $ BS.readFile svgPath
+                         return (TLE.decodeUtf8 svg')
+      return $ Just $ ImgInfo name capped svgContent True
     Nothing -> return Nothing
 
 closureGetName :: ClosureDetails -> Maybe String
@@ -1262,7 +1294,16 @@ handleFilter appStateRef = do
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
+  Scotty.get "/graph.svg" $ do
+    Scotty.setHeader "Content-Type" "image/svg+xml"
+    Scotty.file svgPath
+  {- Generates the graph on demand -}
   Scotty.get "/graph" $ do
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected _ _ (PausedMode os) -> do
+        _ <- liftIO $ _genSvg os
+        return ()
     Scotty.setHeader "Content-Type" "image/svg+xml"
     Scotty.file svgPath
   {- Serves the profile dump file -}
@@ -1346,6 +1387,7 @@ app appStateRef = do
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
             cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+            updateImg appStateRef cdio
             Scotty.html $ renderConnectedPage selectedPath cdio socket debuggee' mode'
           _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing undefined) socket debuggee' mode'
       _ -> Scotty.redirect "/"
@@ -1389,6 +1431,7 @@ app appStateRef = do
                               (Just 100)
                               []
                               ver 
+                              (return "")
             newAppState = state & majorState . mode .~ pausedState
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/connect"     

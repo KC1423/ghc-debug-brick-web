@@ -136,7 +136,7 @@ data ClosureDetails = ClosureDetails
 data ImgInfo = ImgInfo
   { _name :: String 
   , _capped :: Bool
-  , _svgContent :: TL.Text 
+  , _svgContent :: IO TL.Text 
   , _hasGV :: Bool
   }
 
@@ -190,6 +190,7 @@ data OperationalState = OperationalState
     , _resultSize :: Maybe Int
     , _filters :: [UIFilter]
     , _version :: GD.Version
+    , _genSvg :: IO TL.Text
     }
 
 clearFilters :: OperationalState -> OperationalState
