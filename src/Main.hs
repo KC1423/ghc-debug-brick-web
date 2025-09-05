@@ -1190,8 +1190,7 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
       let svgContent = liftIO $ do 
                          createDirectoryIfMissing True "tmp"
                          _ <- runGraphviz graph Svg svgPath
-                         svg' <- liftIO $ BS.readFile svgPath
-                         return (TLE.decodeUtf8 svg')
+                         return ()
       return $ Just $ ImgInfo name capped svgContent True
     Nothing -> return Nothing
 
@@ -1431,7 +1430,7 @@ app appStateRef = do
                               (Just 100)
                               []
                               ver 
-                              (return "")
+                              (return ())
             newAppState = state & majorState . mode .~ pausedState
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/connect"     
