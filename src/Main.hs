@@ -365,7 +365,7 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
     div_ [class_ "iotree"] $
       renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
-    script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
+    expandToggleScript
    
 renderClosureSummary :: ClosureDetails -> [Int] -> CDIO -> Html ()
 renderClosureSummary node' path CDIO{..} =
@@ -578,7 +578,7 @@ genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
   div_ [class_ "iotree"] $
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
   autoScrollScript
-  script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
+  expandToggleScript
 
 renderProfilePage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
                   -> [Int] -> CDIO -> TL.Text
@@ -636,7 +636,7 @@ renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdi
   div_ [class_ "iotree"] $
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
   autoScrollScript
-  script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
+  expandToggleScript
 
 
 genFilterButtons :: String -> String -> Html ()
@@ -1087,6 +1087,7 @@ autoScrollScript = script_ $ mconcat
                      , "if (scrollY !== null) window.scrollTo(0, parseInt(scrollY, 10));"
                      , "});"
                      ]
+expandToggleScript = script_ [src_ "e2.js", defer_ ""] (mempty :: Html ())
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1310,7 +1311,7 @@ handleToggle newTree toggleIx selectedPath renderRow = do
       let htmlChildren = renderTreeNodesHtml renderRow selectedPath toggleIx children
           htmlResponse = renderText $ div_ htmlChildren
       Scotty.html htmlResponse    
-    _ -> Scotty.text "No children"
+    _ -> Scotty.html mempty
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do

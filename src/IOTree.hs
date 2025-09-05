@@ -125,8 +125,8 @@ toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
                                    Left getChildren -> do
                                      cs <- getChildren
                                      return $ IOTreeNode node' (Right cs) : rest                
-                                   --Right cs -> return $ IOTreeNode node' (Left $ return cs) : rest
-                                   Right cs -> return $ IOTreeNode node' (Right cs) : rest
+                                   Right cs -> return $ IOTreeNode node' (Left $ return cs) : rest
+                                   --Right cs -> return $ IOTreeNode node' (Right cs) : rest
                             else case csE of
                                    Left getChildren -> do
                                      csE' <- getChildren
