@@ -1768,5 +1768,5 @@ main = do
   let initial = initialAppState
   appStateRef <- newIORef initial
   Scotty.scotty 3000 $ do
-    Scotty.middleware $ NWMS.staticPolicy (NWMS.addBase "tmp")
+    Scotty.middleware $ NWMS.staticPolicy (NWMS.addBase "src/js")
     app appStateRef
