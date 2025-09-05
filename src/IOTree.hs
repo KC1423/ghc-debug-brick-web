@@ -10,6 +10,7 @@ module IOTree
   , ioTree
 
   , renderIOTreeHtml
+  , renderTreeNodesHtml
   , IOTreeNode(..)
   , getSubTree
   , toggleTreeByPath
@@ -19,6 +20,9 @@ module IOTree
 
 import Lucid
 import qualified Data.Set as Set
+import qualified Data.Text as T
+import Data.List
+import Debug.Trace
 
 -- A tree style list where items can be expanded and collapsed
 data IOTree node name = IOTree
@@ -61,32 +65,47 @@ nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))
 
 
 {- New code / web stuff -}
+encodePath :: [Int] -> T.Text
+encodePath = T.pack . intercalate "." . map show
 
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
                                           -> [Int]
                                           -> ([Int] -> [Int] -> Bool -> Bool -> node -> Html ())
                                           -> Html ()
 renderIOTreeHtml (IOTree _ roots _) selectedPath renderRow =
-  div_ [class_ "iotree"] $
-    go [] roots
-  where go _ [] = mempty
-        go parentPath trees = mconcat $ zipWith renderOne [0..] trees
-          where renderOne ix (IOTreeNode nodeContent children) =
-                  let thisPath = parentPath ++ [ix]
-                      selected = thisPath == selectedPath
-                      expanded = case children of
-                                   Left _ -> False
-                                   Right _ -> True
-                      rowHtml = renderRow selectedPath thisPath expanded selected nodeContent
-                      childHtml = go thisPath (either (const []) id children)
-                  in rowHtml <> childHtml
+  renderTreeNodesHtml renderRow selectedPath [] roots
+  
+renderTreeNodesHtml :: ([Int] -> [Int] -> Bool -> Bool -> a -> Html ())
+                    -> [Int] -> [Int] -> [IOTreeNode a name] -> Html ()
+renderTreeNodesHtml renderRow selectedPath parentPath nodes = 
+  mconcat $ zipWith renderOne [0..] nodes
+  where
+    renderOne ix (IOTreeNode content children) = 
+      let thisPath = parentPath ++ [ix]
+          selected = thisPath == selectedPath
+          expanded = case children of
+                       Right _ -> True
+                       Left _ -> False
+          rowHtml = renderRow selectedPath thisPath expanded selected content
+          childHtml =
+            case children of
+              Right cs -> 
+                div_
+                  [ id_ ("children-" <> encodePath thisPath)
+                  , class_ "children"
+                  , data_ "loaded" "true"
+                  , style_ "display: block;"
+                  ] $
+                    renderTreeNodesHtml renderRow selectedPath thisPath cs
+              Left _ -> mempty
+      in rowHtml <> childHtml               
 
 getSubTree :: IOTree node name -> [Int] -> Maybe (IOTreeNode node name)
 getSubTree (IOTree _ roots _) path = findNodeByPath roots path
   where findNodeByPath :: [IOTreeNode node name] -> [Int] -> Maybe (IOTreeNode node name)
         findNodeByPath _ [] = Nothing
         findNodeByPath [] _ = Nothing
-        findNodeByPath (n@(IOTreeNode _ csE) : rest) (i:is) = 
+        findNodeByPath (n@(IOTreeNode _ csE) : rest) (i:is) =  
           if i == 0 then if null is then Just n else case csE of
                                                        Left _ -> Nothing
                                                        Right cs -> findNodeByPath cs is
@@ -106,7 +125,8 @@ toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
                                    Left getChildren -> do
                                      cs <- getChildren
                                      return $ IOTreeNode node' (Right cs) : rest                
-                                   Right cs -> return $ IOTreeNode node' (Left $ return cs) : rest
+                                   --Right cs -> return $ IOTreeNode node' (Left $ return cs) : rest
+                                   Right cs -> return $ IOTreeNode node' (Right cs) : rest
                             else case csE of
                                    Left getChildren -> do
                                      csE' <- getChildren

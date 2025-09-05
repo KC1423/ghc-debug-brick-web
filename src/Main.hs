@@ -48,6 +48,7 @@ import qualified Eventlog.Args as EA
 import Data.Aeson (encode)
 import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC, getSourceInfo)
 import Data.Maybe (catMaybes)
+import qualified Network.Wai.Middleware.Static as NWMS
 
 import Control.Applicative
 import Control.Monad (forM)
@@ -361,9 +362,11 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       SearchedHtml {} -> pack "Search Results"
     
     --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
-    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
+    div_ [class_ "iotree"] $
+      renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
-
+    script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
+   
 renderClosureSummary :: ClosureDetails -> [Int] -> CDIO -> Html ()
 renderClosureSummary node' path CDIO{..} =
   case node' of
@@ -572,8 +575,10 @@ genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -
 genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
   detailedSummary renderSummary' tree selectedPath cdio
   h3_ "Results"
-  renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
+  div_ [class_ "iotree"] $
+    renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
   autoScrollScript
+  script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
 
 renderProfilePage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
                   -> [Int] -> CDIO -> TL.Text
@@ -628,8 +633,10 @@ renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdi
         button_ [type_ "submit"] "Clear all filters"    
    
 
-  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
+  div_ [class_ "iotree"] $
+    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
   autoScrollScript
+  script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
 
 
 genFilterButtons :: String -> String -> Html ()
@@ -703,12 +710,18 @@ detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
       pathStr = encodePath thisPath
       selectedStr = encodePath selectedPath
       linkStyle = "color: " ++ (if selected then "purple" else "blue") ++ "; text-decoration: none;"
+      dataPathAttr = data_ "path" pathStr
   in div_ [class_ classStr, styleAttr] $ do
-       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
+       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;", class_ "expand-form", dataPathAttr] $ do
          input_ [type_ "hidden", name_ "toggle", value_ pathStr]
          input_ [type_ "hidden", name_ "selected", value_ selectedStr]
-         button_ [type_ "submit", class_ "expand-button"] $
-           toHtml $ if expanded then "+" else "-" :: String
+         button_ 
+           [ type_ "button"
+           , class_ "expand-button"
+           , data_ "expanded" (pack $ if expanded then "true" else "false")
+           , dataPathAttr
+           ]
+           (toHtml $ if expanded then "+" else "-" :: String)
        a_ [href_ ("/" <> pack name <> "?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderHtml obj
 
 renderClosureHtml :: ClosureDetails -> Html ()
@@ -878,7 +891,7 @@ ccFormat Debug.CCPayload{..} = List.intercalate "\n" $
 
 parsePath :: String -> [Int]
 parsePath [] = []
-parsePath s = map read $ splitOn "." s
+parsePath s = map read $ splitOn "-" s
 
 parseProfileLevel :: String -> ProfileLevel
 parseProfileLevel "1" = OneLevel
@@ -893,7 +906,7 @@ truncT :: Text -> Text
 truncT = pack . trunc . T.unpack
 
 encodePath :: [Int] -> Text
-encodePath = pack . List.intercalate "." . map show
+encodePath = pack . List.intercalate "-" . map show
 
 togglePath :: Eq a => [a] -> [[a]] -> [[a]]
 togglePath x xs = if x `elem` xs then filter (/=x) xs else x:xs
@@ -1290,6 +1303,15 @@ handleFilter appStateRef = do
           newAppState = updateAppState os (setTM newTM) socket debuggee' state
       liftIO $ writeIORef appStateRef newAppState
 
+handleToggle newTree toggleIx selectedPath renderRow = do
+  let mNode = getSubTree newTree toggleIx
+  case mNode of
+    Just (IOTreeNode _ (Right children)) -> do
+      let htmlChildren = renderTreeNodesHtml renderRow selectedPath toggleIx children
+          htmlResponse = renderText $ div_ htmlChildren
+      Scotty.html htmlResponse    
+    _ -> Scotty.text "No children"
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
@@ -1455,6 +1477,33 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/"
       _ -> Scotty.redirect "/"
+  {- New JS route for toggling expansion state -}
+  Scotty.get "/tree/children" $ do
+    toggleIx <- togglePathParam Scotty.queryParam
+    selectedPath <- selectedParam Scotty.formParam
+    let newSelected = toggleSelected selectedPath toggleIx
+    let selectedStr = encodePath newSelected
+    state <- liftIO $ readIORef appStateRef
+    case state ^. majorState of
+      Connected socket debuggee' (PausedMode os) -> do
+        case _treeMode os of
+          SavedAndGCRoots -> do 
+            let tree = _treeSavedAndGCRoots os
+            newTree <- liftIO $ toggleTreeByPath tree toggleIx
+            let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
+            liftIO $ writeIORef appStateRef newAppState
+            handleToggle newTree toggleIx selectedPath (detailedRowHtml renderClosureHtml "connect") 
+          Retainer tree suggs -> do
+            newTree <- liftIO $ toggleTreeByPath tree toggleIx
+            let newAppState = updateAppState os (setTM $ Retainer newTree suggs) socket debuggee' state
+            liftIO $ writeIORef appStateRef newAppState
+            handleToggle newTree toggleIx selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters") 
+          SearchedHtml f tree name -> do
+            newTree <- liftIO $ toggleTreeByPath tree toggleIx
+            let newAppState = updateAppState os (setTM $ SearchedHtml f newTree name) socket debuggee' state
+            liftIO $ writeIORef appStateRef newAppState
+            handleToggle newTree toggleIx selectedPath (detailedRowHtml (_renderRow f) name) 
+           
   {- Toggles the expansion state of a path in the tree -}
   Scotty.post "/toggle" $ do
     toggleIx <- togglePathParam Scotty.formParam
@@ -1718,4 +1767,6 @@ main :: IO ()
 main = do
   let initial = initialAppState
   appStateRef <- newIORef initial
-  Scotty.scotty 3000 (app appStateRef)
+  Scotty.scotty 3000 $ do
+    Scotty.middleware $ NWMS.staticPolicy (NWMS.addBase "tmp")
+    app appStateRef
