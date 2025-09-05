@@ -1,34 +1,28 @@
 document.addEventListener("DOMContentLoaded", () => {
-  attachExpandListeners();
-});
-function attachExpandListeners() {
-  document.querySelectorAll('.expand-button').forEach(button => {
-    if (button.dataset.listenerAttached === "true") return; // prevent duplicate
-    button.dataset.listenerAttached = "true";
-    button.addEventListener('click', async (e) => {
+  document.body.addEventListener("click", async (e) => {
+      const button = e.target.closest(".expand-button");
+      if (!button) return;
       e.preventDefault();
-      const form = button.closest("form");
-      const pathInput = form.querySelector("input[name=toggle]");
-      const path = pathInput.value;
+
+      const path = button.dataset.path;
       const containerId = "children-" + path;
       let container = document.getElementById(containerId);
-      if (container) {
-        const isVisible = container.style.display !== "none";
-        container.style.display = isVisible ? "none" : "block";
-        button.textContent = isVisible ? "-" : "+";
-      } else {
-        const res = await fetch(`/tree/children?toggle=${encodeURIComponent(path)}`);
-        const html = await res.text();
+
+      const res = await fetch(`/toggle?toggle=${path}`);
+      const html = await res.text();
+
+      if (!container) {
         container = document.createElement("div");
         container.id = containerId;
-        container.innerHTML = html;
-        container.style.display = "block";
+        container.classList.add("children");
         button.closest(".tree-row")?.insertAdjacentElement("afterend", container);
-        attachExpandListeners();  // Recurse to attach events to newly added buttons
-        button.textContent = "+";
       }
-    });
-  });
-}
 
-     
+      container.innerHTML = html;
+
+      const isEmpty = html.trim() === "";
+      container.style.display = isEmpty ? "none" : "block";
+      button.textContent = isEmpty ? "-" : "+";
+  });
+});
+

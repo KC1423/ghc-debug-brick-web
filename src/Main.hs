@@ -1087,7 +1087,7 @@ autoScrollScript = script_ $ mconcat
                      , "if (scrollY !== null) window.scrollTo(0, parseInt(scrollY, 10));"
                      , "});"
                      ]
-expandToggleScript = script_ [src_ "e2.js", defer_ ""] (mempty :: Html ())
+expandToggleScript = script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1478,8 +1478,8 @@ app appStateRef = do
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/"
       _ -> Scotty.redirect "/"
-  {- New JS route for toggling expansion state -}
-  Scotty.get "/tree/children" $ do
+  {- Toggles the expansion state of a path in the tree -}
+  Scotty.get "/toggle" $ do
     toggleIx <- togglePathParam Scotty.queryParam
     selectedPath <- selectedParam Scotty.formParam
     let newSelected = toggleSelected selectedPath toggleIx
@@ -1504,34 +1504,6 @@ app appStateRef = do
             let newAppState = updateAppState os (setTM $ SearchedHtml f newTree name) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             handleToggle newTree toggleIx selectedPath (detailedRowHtml (_renderRow f) name) 
-           
-  {- Toggles the expansion state of a path in the tree -}
-  Scotty.post "/toggle" $ do
-    toggleIx <- togglePathParam Scotty.formParam
-    selectedPath <- selectedParam Scotty.formParam
-    let newSelected = toggleSelected selectedPath toggleIx
-    let selectedStr = encodePath newSelected
-    state <- liftIO $ readIORef appStateRef
-    case state ^. majorState of
-      Connected socket debuggee' (PausedMode os) -> do
-        case _treeMode os of
-          SavedAndGCRoots -> do 
-            let tree = _treeSavedAndGCRoots os
-            newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
-            liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
-          Retainer tree suggs -> do
-            newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newAppState = updateAppState os (setTM $ Retainer newTree suggs) socket debuggee' state
-            liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
-          SearchedHtml f tree name -> do
-            newTree <- liftIO $ toggleTreeByPath tree toggleIx
-            let newAppState = updateAppState os (setTM $ SearchedHtml f newTree name) socket debuggee' state
-            liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
-      _ -> Scotty.redirect "/"
   {- View profile (level 1 and 2) -}
   genericGet appStateRef "/profile" renderProfilePage
   Scotty.post "/profile" $ do
