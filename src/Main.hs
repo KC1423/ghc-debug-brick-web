@@ -45,7 +45,7 @@ import Network.Wai.Parse (FileInfo(..))
 import Eventlog.Data (generateJsonValidate, HeapProfileData(..), eventlogHeapProfile, generateJson)
 import Eventlog.HtmlTemplate (templateString)
 import qualified Eventlog.Args as EA
-import Data.Aeson (encode)
+import Data.Aeson (encode, object, (.=))
 import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC, getSourceInfo)
 import Data.Maybe (catMaybes)
 import qualified Network.Wai.Middleware.Static as NWMS
@@ -56,7 +56,7 @@ import Control.Monad.IO.Class
 import qualified Data.List as List
 import Data.Ord (comparing)
 import qualified Data.Ord as Ord
-import Lens.Micro.Platform
+import Lens.Micro.Platform ((^.), (&), (.~), (%~))
 import System.Directory
 import System.FilePath
 import Data.Bool
@@ -362,10 +362,11 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       SearchedHtml {} -> pack "Search Results"
     
     --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
-    div_ [class_ "iotree"] $
+    div_ [id_ "iotree"] $
       renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
     autoScrollScript
     expandToggleScript
+    selectTreeLinkScript
    
 renderClosureSummary :: ClosureDetails -> [Int] -> CDIO -> Html ()
 renderClosureSummary node' path CDIO{..} =
@@ -395,7 +396,7 @@ detailedSummary :: (Ord name, Show name)
                 => (a -> [Int] -> CDIO -> Html ())
                 -> IOTree a name -> [Int] -> CDIO -> Html ()
 detailedSummary f tree path cdio =
-  div_ [class_ "selection-summary"] $ do
+  div_ [id_ "selection-summary"] $ do
     case getSubTree tree path of
       Nothing -> mempty
       Just (IOTreeNode node' _) -> f node' path cdio
@@ -499,7 +500,7 @@ renderMImg CDIO {..} =
 renderImgPage :: String -> Bool -> Html () 
 renderImgPage name capped = do
   div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-    h3_ $ toHtml $ "Visualisation of " ++ name
+    h3_ [id_ "image-title"] $ toHtml $ "Visualisation of " ++ name
     button_ [ id_ "toggleButton", onclick_ "toggleDiv()" ] "Show"
   if capped then p_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
   div_ [ id_ "toggleDiv", style_ "display: none;" ] $ do 
@@ -513,7 +514,7 @@ renderImgPage name capped = do
       div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; max-width: 800px; height: 80vh; overflow: hidden;"] $ 
         mempty
     script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
-    script_ $ mconcat
+    {-script_ $ mconcat
       [ "let svgLoaded = false;\n"
       , "function fetchAndRender() {"
       , "  if (!svgLoaded) {\n"
@@ -568,14 +569,14 @@ renderImgPage name capped = do
       , "  }\n"
       , "});\n"
       ]
-      
+      -}
 genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -> Html ())
                 -> (node -> [Int] -> CDIO -> Html ()) -> String -> CDIO
                 -> HtmlT Identity ()
 genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
   detailedSummary renderSummary' tree selectedPath cdio
   h3_ "Results"
-  div_ [class_ "iotree"] $
+  div_ [id_ "iotree"] $
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
   autoScrollScript
   expandToggleScript
@@ -633,7 +634,7 @@ renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdi
         button_ [type_ "submit"] "Clear all filters"    
    
 
-  div_ [class_ "iotree"] $
+  div_ [id_ "iotree"] $
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
   autoScrollScript
   expandToggleScript
@@ -720,7 +721,7 @@ detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
            , dataPathAttr
            ]
            (toHtml $ if expanded then "+" else "-" :: String)
-       a_ [href_ ("/" <> pack name <> "?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderHtml obj
+       a_ [href_ ("/" <> pack name <> "?selected=" <> pathStr), class_ "tree-link", style_ (pack $ linkStyle), data_ "selected" pathStr] $ renderHtml obj
 
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure' _excSize info') = div_ [class_ "closure-row"] $ do
@@ -1086,6 +1087,7 @@ autoScrollScript = script_ $ mconcat
                      , "});"
                      ]
 expandToggleScript = script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
+selectTreeLinkScript = script_ [src_ "s3.js", defer_ ""] (mempty :: Html ())
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1189,6 +1191,9 @@ getCDIO tree selectedPath getName' getSize' nodeName format' =
       else do
         imgInfo <- handleImg expSubTree capped nodeName getName' format'
         return $ CDIO mInc imgInfo
+
+imgName :: CDIO -> String
+imgName (CDIO _ (Just ImgInfo{..})) = _name
 
 handleImg :: IOTreeNode a name -> Bool -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> (a -> String) -> Scotty.ActionM (Maybe ImgInfo)
 handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
@@ -1397,6 +1402,21 @@ app appStateRef = do
 
           
       Nothing -> Scotty.text "No file uploaded"
+  {- For fetching info so JS can update the page -}
+  Scotty.get "/partial" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected socket debuggee' (PausedMode os) ->
+        case _treeMode os of
+          SavedAndGCRoots -> do
+            let tree = _treeSavedAndGCRoots os
+            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+            updateImg appStateRef cdio
+            let summaryHtml = renderText $ detailedSummary renderClosureSummary tree selectedPath cdio
+            let imgTitle = "Visualisation of " ++ (imgName cdio)
+            Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+            
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
