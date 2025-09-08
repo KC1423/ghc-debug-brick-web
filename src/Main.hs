@@ -712,9 +712,7 @@ detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
       linkStyle = "color: " ++ (if selected then "purple" else "blue") ++ "; text-decoration: none;"
       dataPathAttr = data_ "path" pathStr
   in div_ [class_ classStr, styleAttr] $ do
-       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;", class_ "expand-form", dataPathAttr] $ do
-         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
-         input_ [type_ "hidden", name_ "selected", value_ selectedStr]
+       form_ [style_ "margin: 0;", class_ "expand-form", dataPathAttr] $ do
          button_ 
            [ type_ "button"
            , class_ "expand-button"
