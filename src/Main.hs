@@ -488,15 +488,13 @@ renderIncSize incSize capped _ = do
 
 renderMImg :: CDIO -> Html ()
 renderMImg CDIO {..} = do 
-  case _imgInfo of
-    Nothing -> renderEmptyImgPanel
-    Just ImgInfo{..} ->
-      if not _hasGV 
-        then do
-          h3_ "You don't have Graphviz installed, which is required to display visualisations of closures" 
-          p_ "Run sudo apt install graphviz"
-        else renderImgPage _name _capped
-
+  if not _hasGV 
+    then do
+      h3_ "You don't have Graphviz installed, which is required to display visualisations of closures" 
+      p_ "Run sudo apt install graphviz"
+    else case _imgInfo of
+      Nothing -> renderEmptyImgPanel
+      Just ImgInfo{..} -> renderImgPage _name _capped
   script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
 
 renderEmptyImgPanel :: Html ()
@@ -1042,7 +1040,7 @@ autoScrollScript = script_ $ mconcat
                      , "});"
                      ]
 expandToggleScript = script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
-selectTreeLinkScript = script_ [src_ "s3.js", defer_ ""] (mempty :: Html ())
+selectTreeLinkScript = script_ [src_ "selectTreeLink.js", defer_ ""] (mempty :: Html ())
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1124,7 +1122,7 @@ closureName (LabelNode l) = T.unpack l
 closureName (CCSDetails clabel _ _) = T.unpack $ clabel
 closureName (CCDetails clabel _) = T.unpack $ clabel
 
-updateImg appStateRef (CDIO _ (Just ImgInfo{..})) = do
+updateImg appStateRef (CDIO _ (Just ImgInfo{..}) _) = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
     Connected s d (PausedMode os) -> do
@@ -1137,18 +1135,20 @@ updateImg _ _ = return ()
 
 getCDIO tree selectedPath getName' getSize' nodeName format' = 
   case getSubTree tree selectedPath of
-    Nothing -> return $ CDIO Nothing Nothing
+    Nothing -> do
+      hasGV <- liftIO $ isGraphvizInstalled
+      return $ CDIO Nothing Nothing hasGV 
     Just subtree -> do
       (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName')
       let mInc = Just (getClosureIncSize getName' getSize' Set.empty expSubTree, capped)
       hasGV <- liftIO $ isGraphvizInstalled
-      if not hasGV then return $ CDIO mInc (Just $ ImgInfo { _hasGV = False })
+      if not hasGV then return $ CDIO mInc Nothing hasGV --(Just $ ImgInfo { _hasGV = False })
       else do
         imgInfo <- handleImg expSubTree capped nodeName getName' format'
-        return $ CDIO mInc imgInfo
+        return $ CDIO mInc imgInfo hasGV
 
 imgName :: CDIO -> String
-imgName (CDIO _ (Just ImgInfo{..})) = _name
+imgName (CDIO _ (Just ImgInfo{..}) _) = _name
 imgName _ = ""
 
 handleImg :: IOTreeNode a name -> Bool -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> (a -> String) -> Scotty.ActionM (Maybe ImgInfo)
@@ -1164,7 +1164,7 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
                          createDirectoryIfMissing True "tmp"
                          _ <- runGraphviz graph Svg svgPath
                          return ()
-      return $ Just $ ImgInfo name capped svgContent True
+      return $ Just $ ImgInfo name capped svgContent
     Nothing -> return Nothing
 
 closureGetName :: ClosureDetails -> Maybe String
@@ -1272,6 +1272,14 @@ handleToggle newTree toggleIx selectedPath renderRow = do
       Scotty.html htmlResponse    
     _ -> Scotty.html mempty
 
+handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
+  cdio <- getCDIO'
+  updateImg appStateRef cdio
+  let summaryHtml = renderText $ detailedSummary renderSummary tree selectedPath cdio
+  let imgName' = imgName cdio
+  let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'
+  Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
@@ -1367,29 +1375,19 @@ app appStateRef = do
         case _treeMode os of
           SavedAndGCRoots -> do
             let tree = _treeSavedAndGCRoots os
-            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
-            updateImg appStateRef cdio
-            let summaryHtml = renderText $ detailedSummary renderClosureSummary tree selectedPath cdio
-            let imgName' = imgName cdio
-            let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'
-            Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+            let getCDIO' = getCDIO tree selectedPath (Just . closureName)
+                           closureGetSize getNodeName closureFormat
+            handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
           Retainer tree suggs -> do
-            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
-            updateImg appStateRef cdio
-            let summaryHtml = renderText $ detailedSummary renderClosureSummary tree selectedPath cdio
-            let imgName' = imgName cdio
-            let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'        
-            Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+            let getCDIO' = getCDIO tree selectedPath (Just . closureName)
+                           closureGetSize getNodeName closureFormat
+            handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
+
           SearchedHtml Utils{..} tree name -> do
-            --cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
             let nameFn = maybe "" id . _getName 
-            cdio <- getCDIO tree selectedPath _getName _getSize
-                    (\(IOTreeNode n' _) -> nameFn n') _graphFormat
-            updateImg appStateRef cdio
-            let summaryHtml = renderText $ detailedSummary _renderSummary tree selectedPath cdio
-            let imgName' = imgName cdio
-            let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'
-            Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+            let getCDIO' = getCDIO tree selectedPath _getName _getSize 
+                           (\(IOTreeNode n' _) -> nameFn n') _graphFormat
+            handlePartial appStateRef tree selectedPath getCDIO' _renderSummary
 
 
             
@@ -1405,7 +1403,7 @@ app appStateRef = do
             cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
             updateImg appStateRef cdio
             Scotty.html $ renderConnectedPage selectedPath cdio socket debuggee' mode'
-          _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing undefined) socket debuggee' mode'
+          _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing Nothing False) socket debuggee' mode'
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do

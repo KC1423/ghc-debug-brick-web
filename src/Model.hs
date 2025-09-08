@@ -137,12 +137,12 @@ data ImgInfo = ImgInfo
   { _name :: String 
   , _capped :: Bool
   , _svgContent :: IO ()
-  , _hasGV :: Bool
   }
 
 data CDIO = CDIO 
   { _mInc :: Maybe (Int, Bool)
   , _imgInfo :: Maybe ImgInfo
+  , _hasGV :: Bool
   }
 
 data Utils a = Utils {
