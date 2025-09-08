@@ -30,8 +30,11 @@ function fetchAndRender() {
 }
 
 function toggleDiv() {
+  const savedState = localStorage.getItem('toggleDivState');
   const div = document.getElementById('toggleDiv');
   const btn = document.getElementById('toggleButton');
+
+  const available = div?.dataset?.available !== "false";
 
   if (div.style.display === 'none') {
     div.style.display = 'block';
@@ -46,12 +49,33 @@ function toggleDiv() {
   }
 }
 
+function applyToggleState() {
+  const savedState = localStorage.getItem('toggleDivState');
+  const div = document.getElementById('toggleDiv');
+  const btn = document.getElementById('toggleButton');
+
+  const available = div?.dataset?.available !== "false";
+
+  if (savedState === 'shown' && available) {
+    div.style.display = 'block';
+    btn.textContent = 'Hide';
+    fetchAndRender();
+  } else {
+    div.style.display = 'none';
+    btn.textContent = 'Show';
+  }
+}
+
 function updateSummaries(pathStr) {
   fetch(`/partial?selected=${encodeURIComponent(pathStr)}`)
     .then(res => res.json())
     .then(data => {
       document.getElementById("selection-summary").innerHTML = data.summary;
-      document.getElementById("image-title").innerHTML = data.imgName;
+      let imgTitle = document.getElementById('image-title');
+      if (imgTitle) {
+        imgTitle.innerHTML = data.imgName;
+      }
+      applyToggleState();
     })
     .catch(err => {
       console.error('Failed to update summaries:', err);
@@ -112,16 +136,17 @@ document.addEventListener('DOMContentLoaded', function() {
   const btn = document.getElementById('toggleButton');
   const state = localStorage.getItem('toggleDivState');
 
-  if (state === 'shown') {
-    div.style.display = 'block';
-    btn.textContent = 'Hide';
-    svgLoaded = false;
-    fetchAndRender();
-  } else {
-    div.style.display = 'none';
-    btn.textContent = 'Show';
+  if (div) {
+    if (state === 'shown') {
+      div.style.display = 'block';
+      btn.textContent = 'Hide';
+      svgLoaded = false;
+      fetchAndRender();
+    } else {
+      div.style.display = 'none';
+      btn.textContent = 'Show';
+    }
   }
-
   // Optional: initialize based on current selected path in URL
   const url = new URL(window.location.href);
   const selected = url.searchParams.get('selected');

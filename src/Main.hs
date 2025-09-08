@@ -487,15 +487,24 @@ renderIncSize incSize capped _ = do
   else mempty-}
 
 renderMImg :: CDIO -> Html ()
-renderMImg CDIO {..} = 
+renderMImg CDIO {..} = do 
   case _imgInfo of
-    Nothing -> mempty
+    Nothing -> renderEmptyImgPanel
     Just ImgInfo{..} ->
       if not _hasGV 
         then do
           h3_ "You don't have Graphviz installed, which is required to display visualisations of closures" 
           p_ "Run sudo apt install graphviz"
         else renderImgPage _name _capped
+
+  script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
+
+renderEmptyImgPanel :: Html ()
+renderEmptyImgPanel = do
+  div_ [style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+    h3_ [id_ "image-title"] "Visualisation"
+    button_ [id_ "toggleButton", onclick_ "toggleDiv()", disabled_ "true"] "Show"
+  div_ [id_ "toggleDiv", style_ "display: none;", data_ "available" "false"] mempty
 
 renderImgPage :: String -> Bool -> Html () 
 renderImgPage name capped = do
@@ -513,63 +522,7 @@ renderImgPage name capped = do
       -- this code renders the svg with JS so it is interactive
       div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; max-width: 800px; height: 80vh; overflow: hidden;"] $ 
         mempty
-    script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
-    {-script_ $ mconcat
-      [ "let svgLoaded = false;\n"
-      , "function fetchAndRender() {"
-      , "  if (!svgLoaded) {\n"
-      , "    const container = document.getElementById('svg-container');\n"
-      , "    container.innerHTML = '<p style=\"font-style: italic; color: #555; \">Loading graph...</p>';"
-      , "    fetch('/graph')\n"
-      , "      .then(res => res.text())\n"
-      , "      .then(svg => {\n"
-      , "        document.getElementById('svg-container').innerHTML = svg;\n"
-      , "        document.getElementById('download-link').style.display = 'inline-block';\n"
-      , "        const element = document.querySelector('#svg-container svg');\n"
-      , "        panzoom(element, {\n"
-      , "          bounds: true,\n"
-      , "          boundsPadding: 0.1,\n"
-      , "          zoomDoubleClickSpeed: 1,\n"
-      , "          maxZoom: 10,\n"
-      , "          minZoom: 0.1\n"
-      , "        });\n"
-      , "        svgLoaded = true;\n"
-      , "      })\n"
-      , "      .catch(err => {\n"
-      , "        console.error('Failed to load graph:', err);\n"
-      , "        document.getElementById('svg-container').innerText = 'Failed to load graph.';\n"
-      , "      });\n"
-      , "  }"
-      , "}"
-      , "function toggleDiv() {\n"
-      , "  const div = document.getElementById('toggleDiv');\n"
-      , "  const btn = document.getElementById('toggleButton');\n"
-      , "  if (div.style.display === 'none') {\n"
-      , "    div.style.display = 'block';\n"
-      , "    btn.textContent = 'Hide';\n"
-      , "    localStorage.setItem('toggleDivState', 'shown');\n"
-      , "    fetchAndRender();"
-      , "  } else {\n"
-      , "    div.style.display = 'none';\n"
-      , "    btn.textContent = 'Show';\n"
-      , "    localStorage.setItem('toggleDivState', 'hidden');\n"
-      , "  }\n"
-      , "}\n"
-      , "document.addEventListener('DOMContentLoaded', function() {\n"
-      , "  const div = document.getElementById('toggleDiv');\n"
-      , "  const btn = document.getElementById('toggleButton');\n"
-      , "  const state = localStorage.getItem('toggleDivState');\n"
-      , "  if (state === 'shown') {\n"
-      , "    div.style.display = 'block';\n"
-      , "    btn.textContent = 'Hide';\n"
-      , "    fetchAndRender();"
-      , "  } else {\n"
-      , "    div.style.display = 'none';\n"
-      , "    btn.textContent = 'Show';\n"
-      , "  }\n"
-      , "});\n"
-      ]
-      -}
+
 genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -> Html ())
                 -> (node -> [Int] -> CDIO -> Html ()) -> String -> CDIO
                 -> HtmlT Identity ()
@@ -580,6 +533,7 @@ genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
   autoScrollScript
   expandToggleScript
+  selectTreeLinkScript
 
 renderProfilePage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
                   -> [Int] -> CDIO -> TL.Text
@@ -638,6 +592,7 @@ renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdi
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
   autoScrollScript
   expandToggleScript
+  selectTreeLinkScript
 
 
 genFilterButtons :: String -> String -> Html ()
@@ -1194,6 +1149,7 @@ getCDIO tree selectedPath getName' getSize' nodeName format' =
 
 imgName :: CDIO -> String
 imgName (CDIO _ (Just ImgInfo{..})) = _name
+imgName _ = ""
 
 handleImg :: IOTreeNode a name -> Bool -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> (a -> String) -> Scotty.ActionM (Maybe ImgInfo)
 handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
@@ -1414,8 +1370,28 @@ app appStateRef = do
             cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
             updateImg appStateRef cdio
             let summaryHtml = renderText $ detailedSummary renderClosureSummary tree selectedPath cdio
-            let imgTitle = "Visualisation of " ++ (imgName cdio)
+            let imgName' = imgName cdio
+            let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'
             Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+          Retainer tree suggs -> do
+            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+            updateImg appStateRef cdio
+            let summaryHtml = renderText $ detailedSummary renderClosureSummary tree selectedPath cdio
+            let imgName' = imgName cdio
+            let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'        
+            Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+          SearchedHtml Utils{..} tree name -> do
+            --cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+            let nameFn = maybe "" id . _getName 
+            cdio <- getCDIO tree selectedPath _getName _getSize
+                    (\(IOTreeNode n' _) -> nameFn n') _graphFormat
+            updateImg appStateRef cdio
+            let summaryHtml = renderText $ detailedSummary _renderSummary tree selectedPath cdio
+            let imgName' = imgName cdio
+            let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'
+            Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+
+
             
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
