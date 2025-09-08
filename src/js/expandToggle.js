@@ -5,10 +5,16 @@ document.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
 
       const path = button.dataset.path;
+      const urlParams = new URLSearchParams(window.location.search);
+      let selected = urlParams.get("selected");
+      if (!selected) {
+        selected = "0"
+      }
+
       const containerId = "children-" + path;
       let container = document.getElementById(containerId);
 
-      const res = await fetch(`/toggle?toggle=${path}`);
+      const res = await fetch(`/toggle?toggle=${path}&selected=${selected}`);
       const html = await res.text();
 
       if (!container) {
@@ -16,13 +22,12 @@ document.addEventListener("DOMContentLoaded", () => {
         container.id = containerId;
         container.classList.add("children");
         button.closest(".tree-row")?.insertAdjacentElement("afterend", container);
-      }
-
-      container.innerHTML = html;
-
-      const isEmpty = html.trim() === "";
-      container.style.display = isEmpty ? "none" : "block";
-      button.textContent = isEmpty ? "-" : "+";
+        container.innerHTML = html;
+        button.textContent = "+";
+      } else {
+        container.remove();
+	button.textContent = "-";
+      } 
   });
 });
 

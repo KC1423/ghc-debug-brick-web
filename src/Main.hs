@@ -363,7 +363,7 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
     
     --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
     div_ [id_ "iotree"] $
-      renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
+      renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect") encodePath
     autoScrollScript
     expandToggleScript
     selectTreeLinkScript
@@ -528,7 +528,7 @@ genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
   detailedSummary renderSummary' tree selectedPath cdio
   h3_ "Results"
   div_ [id_ "iotree"] $
-    renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
+    renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name) encodePath
   autoScrollScript
   expandToggleScript
   selectTreeLinkScript
@@ -587,7 +587,7 @@ renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdi
    
 
   div_ [id_ "iotree"] $
-    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
+    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters") encodePath
   autoScrollScript
   expandToggleScript
   selectTreeLinkScript
@@ -1267,7 +1267,7 @@ handleToggle newTree toggleIx selectedPath renderRow = do
   let mNode = getSubTree newTree toggleIx
   case mNode of
     Just (IOTreeNode _ (Right children)) -> do
-      let htmlChildren = renderTreeNodesHtml renderRow selectedPath toggleIx children
+      let htmlChildren = renderTreeNodesHtml renderRow selectedPath toggleIx children encodePath
           htmlResponse = renderText $ div_ htmlChildren
       Scotty.html htmlResponse    
     _ -> Scotty.html mempty
@@ -1473,7 +1473,7 @@ app appStateRef = do
   {- Toggles the expansion state of a path in the tree -}
   Scotty.get "/toggle" $ do
     toggleIx <- togglePathParam Scotty.queryParam
-    selectedPath <- selectedParam Scotty.formParam
+    selectedPath <- selectedParam Scotty.queryParam
     let newSelected = toggleSelected selectedPath toggleIx
     let selectedStr = encodePath newSelected
     state <- liftIO $ readIORef appStateRef

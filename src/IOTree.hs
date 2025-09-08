@@ -65,19 +65,17 @@ nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))
 
 
 {- New code / web stuff -}
-encodePath :: [Int] -> T.Text
-encodePath = T.pack . intercalate "." . map show
-
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
                                           -> [Int]
                                           -> ([Int] -> [Int] -> Bool -> Bool -> node -> Html ())
+                                          -> ([Int] -> T.Text)
                                           -> Html ()
-renderIOTreeHtml (IOTree _ roots _) selectedPath renderRow =
-  renderTreeNodesHtml renderRow selectedPath [] roots
+renderIOTreeHtml (IOTree _ roots _) selectedPath renderRow encode =
+  renderTreeNodesHtml renderRow selectedPath [] roots encode
   
 renderTreeNodesHtml :: ([Int] -> [Int] -> Bool -> Bool -> a -> Html ())
-                    -> [Int] -> [Int] -> [IOTreeNode a name] -> Html ()
-renderTreeNodesHtml renderRow selectedPath parentPath nodes = 
+                    -> [Int] -> [Int] -> [IOTreeNode a name] -> ([Int] -> T.Text) -> Html ()
+renderTreeNodesHtml renderRow selectedPath parentPath nodes encode = 
   mconcat $ zipWith renderOne [0..] nodes
   where
     renderOne ix (IOTreeNode content children) = 
@@ -91,12 +89,12 @@ renderTreeNodesHtml renderRow selectedPath parentPath nodes =
             case children of
               Right cs -> 
                 div_
-                  [ id_ ("children-" <> encodePath thisPath)
+                  [ id_ ("children-" <> encode thisPath)
                   , class_ "children"
                   , data_ "loaded" "true"
                   , style_ "display: block;"
                   ] $
-                    renderTreeNodesHtml renderRow selectedPath thisPath cs
+                    renderTreeNodesHtml renderRow selectedPath thisPath cs encode
               Left _ -> mempty
       in rowHtml <> childHtml               
 
