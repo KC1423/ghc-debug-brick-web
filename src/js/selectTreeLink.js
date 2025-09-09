@@ -59,8 +59,9 @@ function toggleDiv() {
     div.style.display = 'block';
     btn.textContent = 'Hide';
     localStorage.setItem('toggleDivState', 'shown');
-    svgLoaded = false;
-    fetchAndRender();
+    if (!svgLoaded) {
+      fetchAndRender();
+    }
   } else {
     div.style.display = 'none';
     btn.textContent = 'Show';
