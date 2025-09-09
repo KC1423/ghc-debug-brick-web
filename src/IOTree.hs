@@ -71,7 +71,8 @@ renderIOTreeHtml :: (Ord name, Show name) => IOTree node name
                                           -> ([Int] -> T.Text)
                                           -> Html ()
 renderIOTreeHtml (IOTree _ roots _) selectedPath renderRow encode =
-  renderTreeNodesHtml renderRow selectedPath [] roots encode
+  div_ [id_ "iotree"] $
+    renderTreeNodesHtml renderRow selectedPath [] roots encode
   
 renderTreeNodesHtml :: ([Int] -> [Int] -> Bool -> Bool -> a -> Html ())
                     -> [Int] -> [Int] -> [IOTreeNode a name] -> ([Int] -> T.Text) -> Html ()

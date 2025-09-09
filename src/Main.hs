@@ -362,8 +362,7 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       SearchedHtml {} -> pack "Search Results"
     
     --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
-    div_ [id_ "iotree"] $
-      renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect") encodePath
+    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect") encodePath
     expandToggleScript
     selectTreeLinkScript
    
@@ -528,8 +527,7 @@ genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -
 genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
   detailedSummary renderSummary' tree selectedPath cdio
   h3_ "Results"
-  div_ [id_ "iotree"] $
-    renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name) encodePath
+  renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name) encodePath
   expandToggleScript
   selectTreeLinkScript
 
@@ -586,8 +584,7 @@ renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdi
         button_ [type_ "submit"] "Clear all filters"    
    
 
-  div_ [id_ "iotree"] $
-    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters") encodePath
+  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters") encodePath
   expandToggleScript
   selectTreeLinkScript
 
