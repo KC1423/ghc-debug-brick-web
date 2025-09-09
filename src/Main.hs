@@ -25,7 +25,7 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled)
+import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled, runGraphvizCommand, GraphvizCommand(..))
 import Data.GraphViz.Attributes.Complete (Attribute(URL))
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph)
@@ -283,7 +283,7 @@ tabs =
   , Tab "ARR_WORDS Count" "/arrWordsCount"
   , Tab "Strings Count" "/stringsCount"
   , Tab "Thunk Analysis" "/thunkAnalysis"
-  , Tab "Search with filters" "/searchWithFilters"
+  , Tab "Search retainers" "/searchWithFilters"
   ]
 
 pageLayout :: Text -> Html () -> Html ()
@@ -364,7 +364,6 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
     --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
     div_ [id_ "iotree"] $
       renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect") encodePath
-    autoScrollScript
     expandToggleScript
     selectTreeLinkScript
    
@@ -501,7 +500,7 @@ renderEmptyImgPanel :: Html ()
 renderEmptyImgPanel = do
   div_ [style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
     h3_ [id_ "image-title"] "Visualisation"
-    button_ [id_ "toggleButton", onclick_ "toggleDiv()", disabled_ "true"] "Show"
+    button_ [id_ "toggleButton", onclick_ "toggleDiv()", disabled_ "true"] "Show" 
   div_ [id_ "toggleDiv", style_ "display: none;", data_ "available" "false"] mempty
 
 renderImgPage :: String -> Bool -> Html () 
@@ -509,6 +508,8 @@ renderImgPage name capped = do
   div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
     h3_ [id_ "image-title"] $ toHtml $ "Visualisation of " ++ name
     button_ [ id_ "toggleButton", onclick_ "toggleDiv()" ] "Show"
+    label_ [for_ "fastModeCheckbox"] " Fast mode: "
+    input_ [type_ "checkbox", id_ "fastModeCheckbox", onchange_ "fastModeToggle()"]
   if capped then p_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
   div_ [ id_ "toggleDiv", style_ "display: none;" ] $ do 
     body_ $ do
@@ -529,7 +530,6 @@ genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
   h3_ "Results"
   div_ [id_ "iotree"] $
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name) encodePath
-  autoScrollScript
   expandToggleScript
   selectTreeLinkScript
 
@@ -588,7 +588,6 @@ renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdi
 
   div_ [id_ "iotree"] $
     renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters") encodePath
-  autoScrollScript
   expandToggleScript
   selectTreeLinkScript
 
@@ -897,6 +896,8 @@ eLogOutParam :: Data.String.IsString t => ParamGet t Bool
 eLogOutParam getParam = readParam "isJson" getParam (maybe False id . readMaybe) False
 filterChangedParam :: Data.String.IsString t => ParamGet t Bool
 filterChangedParam getParam = readParam "filterChanged" getParam (maybe False id . readMaybe) False
+fastModeParam :: Data.String.IsString t => ParamGet t Bool
+fastModeParam getParam = readParam "fastMode" getParam (maybe False id . readMaybe) False
 
 buildClosureGraph :: [String] -> [(String, String)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
@@ -1029,16 +1030,6 @@ toRGBA8 c =
   in JP.PixelRGBA8 (fromIntegral r) (fromIntegral g) (fromIntegral b) 255
 
 
-autoScrollScript :: HtmlT Data.Functor.Identity.Identity ()
-autoScrollScript = script_ $ mconcat
-                     [ "window.addEventListener('beforeunload', () => {"
-                     , "sessionStorage.setItem('scrollY', window.scrollY);"
-                     , "});"
-                     , "window.addEventListener('load', () => {"
-                     , "const scrollY = sessionStorage.getItem('scrollY');"
-                     , "if (scrollY !== null) window.scrollTo(0, parseInt(scrollY, 10));"
-                     , "});"
-                     ]
 expandToggleScript = script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
 selectTreeLinkScript = script_ [src_ "selectTreeLink.js", defer_ ""] (mempty :: Html ())
 
@@ -1160,10 +1151,11 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
       let graph = buildClosureGraph vizNodes fNodes vizEdges
-      let svgContent = liftIO $ do 
-                         createDirectoryIfMissing True "tmp"
-                         _ <- runGraphviz graph Svg svgPath
-                         return ()
+      let svgContent comm = liftIO $ do 
+                              createDirectoryIfMissing True "tmp"
+                              --_ <- runGraphviz graph out svgPath
+                              _ <- runGraphvizCommand comm graph Svg svgPath
+                              return ()
       return $ Just $ ImgInfo name capped svgContent
     Nothing -> return Nothing
 
@@ -1291,8 +1283,8 @@ app appStateRef = do
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected _ _ (PausedMode os) -> do
-        _ <- liftIO $ _genSvg os
-        return ()
+        fastMode <- fastModeParam Scotty.queryParam
+        liftIO $ _genSvg os (if fastMode then Fdp else Dot)
     Scotty.setHeader "Content-Type" "image/svg+xml"
     Scotty.file svgPath
   {- Serves the profile dump file -}
@@ -1445,7 +1437,7 @@ app appStateRef = do
                               (Just 100)
                               []
                               ver 
-                              (return ())
+                              (const $ return ())
             newAppState = state & majorState . mode .~ pausedState
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/connect"     

@@ -1,11 +1,29 @@
 let svgLoaded = false;
 
+function fastModeToggle() {
+  const graphDiv = document.getElementById('toggleDiv');
+  const container = document.getElementById('svg-container');
+  if (graphDiv && graphDiv.style.display !== 'none') {
+    svgLoaded = false;
+    if (container) {
+      container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
+    }
+    fetchAndRender();
+  }
+}
+
 function fetchAndRender() {
   const container = document.getElementById('svg-container');
   if (!svgLoaded && container) {
     container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
 
-    fetch('/graph')
+    const fastCheckbox = document.getElementById('fastModeCheckbox')
+    console.log(fastCheckbox);
+    const isFast = fastCheckbox?.checked;
+    console.log(isFast);
+    const url = isFast ? '/graph?fastMode=True' : '/graph';
+
+    fetch(url)
       .then(res => res.text())
       .then(svg => {
         container.innerHTML = svg;

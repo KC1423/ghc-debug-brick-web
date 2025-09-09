@@ -20,6 +20,7 @@ import Control.Exception (try, SomeException)
 import Web.Scotty.Internal.Types
 import Lucid
 import qualified Data.Text.Lazy as TL
+import Data.GraphViz
 
 import Lens.Micro.Platform
 import Data.Time
@@ -136,7 +137,7 @@ data ClosureDetails = ClosureDetails
 data ImgInfo = ImgInfo
   { _name :: String 
   , _capped :: Bool
-  , _svgContent :: IO ()
+  , _svgContent :: GraphvizCommand -> IO ()
   }
 
 data CDIO = CDIO 
@@ -190,7 +191,7 @@ data OperationalState = OperationalState
     , _resultSize :: Maybe Int
     , _filters :: [UIFilter]
     , _version :: GD.Version
-    , _genSvg :: IO ()
+    , _genSvg :: GraphvizCommand -> IO ()
     }
 
 clearFilters :: OperationalState -> OperationalState
