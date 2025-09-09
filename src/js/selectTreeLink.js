@@ -7,6 +7,7 @@ function fastModeToggle() {
     svgLoaded = false;
     if (container) {
       container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
+      document.getElementById('download-link').style.display = 'none';
     }
     fetchAndRender();
   }
@@ -127,6 +128,7 @@ function updateSelection(pathStr) {
   if (graphDiv && graphDiv.style.display !== 'none') {
     if (container) {
       container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
+      document.getElementById('download-link').style.display = 'none';
     }
     setTimeout(() => {
       fetchAndRender();
