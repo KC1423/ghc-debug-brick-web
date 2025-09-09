@@ -26,9 +26,9 @@ import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
 import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled, runGraphvizCommand, GraphvizCommand(..))
-import Data.GraphViz.Attributes.Complete (Attribute(URL))
+import Data.GraphViz.Attributes.Complete (Attribute(URL, Height, Margin, Width, Shape, NodeSep, RankSep, Sep, Overlap, K), DPoint(DVal), Shape(Circle), Overlap(ScaleXYOverlaps))
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
-import Data.GraphViz.Types.Generalised (DotGraph)
+import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, GlobalAttributes(GraphAttrs, NodeAttrs), DotStatement(GA))
 import Web.Scotty.Internal.Types
 import Data.Functor.Identity (Identity)
 import Data.String (IsString)
@@ -1151,10 +1151,14 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
       let graph = buildClosureGraph vizNodes fNodes vizEdges
+      let tweakGraph :: GraphvizCommand -> DotGraph Int -> DotGraph Int
+          tweakGraph Dot g = g
+          tweakGraph comm g = g { graphStatements = (graphStatements g) <> stmts }
+            where stmts = [ GA $ GraphAttrs [Overlap ScaleXYOverlaps, Sep (DVal 0.1), NodeSep 0.05, RankSep [0.05], K 0.01] 
+                          , GA $ NodeAttrs [Shape Circle, Width 0.05, Height 0.05, Margin (DVal 0.01) ]]
       let svgContent comm = liftIO $ do 
                               createDirectoryIfMissing True "tmp"
-                              --_ <- runGraphviz graph out svgPath
-                              _ <- runGraphvizCommand comm graph Svg svgPath
+                              _ <- runGraphvizCommand comm (tweakGraph comm graph) Svg svgPath
                               return ()
       return $ Just $ ImgInfo name capped svgContent
     Nothing -> return Nothing
