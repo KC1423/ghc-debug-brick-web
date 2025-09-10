@@ -78,6 +78,24 @@ function toggleDiv() {
   }
 }
 
+function applyToggleState() {
+  const savedState = localStorage.getItem('toggleDivState');
+  const div = document.getElementById('toggleDiv');
+  const btn = document.getElementById('toggleButton');
+
+  const available = div?.dataset?.available !== "false";
+
+  if (savedState === 'shown' && available) {
+    div.style.display = 'block';
+    btn.textContent = 'Hide';
+    //fetchAndRender();
+  } else {
+    div.style.display = 'none';
+    btn.textContent = 'Show';
+  }
+}
+
+
 function updateSummaries(pathStr) {
   return fetch(`/partial?selected=${encodeURIComponent(pathStr)}`)
     .then(res => res.json())
@@ -87,6 +105,7 @@ function updateSummaries(pathStr) {
       if (imgTitle) {
         imgTitle.innerHTML = data.imgName;
       }
+      applyToggleState();
     });
     /*.catch(err => {
       console.error('Failed to update summaries:', err);

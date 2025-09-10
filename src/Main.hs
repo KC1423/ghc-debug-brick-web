@@ -1283,6 +1283,7 @@ app appStateRef = do
     Scotty.file svgPath
   {- Generates the graph on demand -}
   Scotty.get "/graph" $ do
+    -- these headers are required to prevent the browser from auto-caching stale images
     Scotty.addHeader "Cache-Control" "no-store, no-cache, must-revalidate, max-age=0"
     Scotty.addHeader "Pragma" "no-cache"
     Scotty.addHeader "Expires" "0"
@@ -1301,7 +1302,7 @@ app appStateRef = do
           Nothing -> return ()
         -- set the async graph gen in the IO, then wait for it to finish
         fastMode <- fastModeParam Scotty.queryParam
-        newTask <- liftIO $ async $ _genSvg os (if fastMode then Fdp else Dot) 
+        newTask <- liftIO $ async $ _genSvg os (if fastMode then Sfdp else Dot) 
         liftIO $ atomicModifyIORef' appStateRef $ \st -> (st {currentTask = Just newTask}, ())
         result <- liftIO $ E.try (wait newTask) :: Scotty.ActionM (Either E.SomeException ())
         case result of
