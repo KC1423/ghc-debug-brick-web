@@ -9,7 +9,6 @@ function fastModeToggle() {
       container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
       document.getElementById('download-link').style.display = 'none';
     }
-    console.log("rendering due to change in toggle");
     fetchAndRender();
   }
 }
@@ -17,7 +16,6 @@ function fastModeToggle() {
 function fetchAndRender() {
   const container = document.getElementById('svg-container');
   if (!svgLoaded && container) {
-    console.log("   fetching and rendering");
     container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
 
     const fastCheckbox = document.getElementById('fastModeCheckbox')
@@ -35,7 +33,6 @@ function fetchAndRender() {
       })
       .then(svg => {
         container.innerHTML = svg;
-	console.log("   fetched and set graph");
         document.getElementById('download-link').style.display = 'inline-block';
 
         const element = document.querySelector('#svg-container svg');
@@ -50,7 +47,6 @@ function fetchAndRender() {
         svgLoaded = true;
       })
       .catch(err => {
-	console.log('Caught error:', err);
 	if (err.message === 'cancelled') {
           console.log('Render cancelled - staying in loading state');
           return;
@@ -73,7 +69,6 @@ function toggleDiv() {
     btn.textContent = 'Hide';
     localStorage.setItem('toggleDivState', 'shown');
     if (!svgLoaded) {
-      console.log("rendering due to toggle of show/hide and graph not rendered already");
       fetchAndRender();
     }
   } else {
@@ -134,14 +129,6 @@ function updateSelection(pathStr) {
         console.error('Failed to update summaries or render graph:', err);
         container.innerHTML = '<p style="color: red;">Failed to update summaries or load graph.</p>';
       });
-
-	  /*
-    setTimeout(() => {
-      if (!svgLoaded) {
-	console.log("rendering due to selection updated");
-        fetchAndRender();
-      }
-    }, 100);*/
   } else {
     updateSummaries(pathStr).catch(err => {
       console.error('Failed to update summaries:', err);
@@ -174,7 +161,6 @@ document.addEventListener('DOMContentLoaded', function() {
       div.style.display = 'block';
       btn.textContent = 'Hide';
       svgLoaded = false;
-      console.log("rendering because dom reloaded")
       fetchAndRender();
     } else {
       div.style.display = 'none';
