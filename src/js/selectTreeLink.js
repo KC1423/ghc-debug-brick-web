@@ -88,7 +88,6 @@ function applyToggleState() {
   if (savedState === 'shown' && available) {
     div.style.display = 'block';
     btn.textContent = 'Hide';
-    //fetchAndRender();
   } else {
     div.style.display = 'none';
     btn.textContent = 'Show';
@@ -107,9 +106,6 @@ function updateSummaries(pathStr) {
       }
       applyToggleState();
     });
-    /*.catch(err => {
-      console.error('Failed to update summaries:', err);
-    });*/
 }
 
 

@@ -353,13 +353,13 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
       button_ [type_ "submit"] "Take snapshot"
 
-    form_ [ method_ "post", action_ "/setSearchLimit"
-          , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-      input_ [type_ "text", name_ "index", placeholder_ "Enter search limit", required_ "required"]
-
-      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-      button_ [type_ "submit"] "Limit searches"
-
+    div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;" ] $ do
+      input_ [type_ "number", id_ "searchLimitInput", placeholder_ "Enter search limit", required_ "required"]
+      --input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+      button_ [type_ "submit", onclick_ "submitSearchLimit()"] "Limit searches"
+      toolTipSpan $ toHtmlRaw ("Default = 100<br>Enter 0 for unlimited searches" :: Text)
+      div_ [id_ "limitResult"] ""
+      setSearchLimitScript
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
       Retainer {} -> pack "Retainers"
@@ -370,6 +370,21 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
     expandToggleScript
     selectTreeLinkScript
    
+toolTipSpan :: Html () -> Html ()
+toolTipSpan msg =
+  -- Tooltip container span
+  span_ 
+    [ style_ "display: inline-block; position: relative; margin-left: 8px; cursor: pointer; font-weight: bold; border: 1px solid #ccc; border-radius: 50%; width: 18px; height: 18px; text-align: center; line-height: 18px; background-color: #eee;"
+    , onmouseover_ "this.querySelector('span').style.visibility='visible'; this.querySelector('span').style.opacity='1';"
+    , onmouseout_ "this.querySelector('span').style.visibility='hidden'; this.querySelector('span').style.opacity='0';"
+    ] $ do
+      "?"
+      -- Tooltip text span
+      span_ 
+        [ style_ "visibility: hidden; width: 160px; background-color: black; color: white; text-align: center; border-radius: 6px; padding: 5px 0; position: absolute; z-index: 1; bottom: 125%; left: 50%; margin-left: -80px; opacity: 0; transition: opacity 0.3s;"
+        ] $ msg
+
+
 renderClosureSummary :: ClosureDetails -> [Int] -> CDIO -> Html ()
 renderClosureSummary node' path CDIO{..} =
   case node' of
@@ -1031,8 +1046,10 @@ toRGBA8 c =
   in JP.PixelRGBA8 (fromIntegral r) (fromIntegral g) (fromIntegral b) 255
 
 
-expandToggleScript = script_ [src_ "expandToggle.js", defer_ ""] (mempty :: Html ())
-selectTreeLinkScript = script_ [src_ "selectTreeLink.js", defer_ ""] (mempty :: Html ())
+genScript loc = script_ [src_ loc, defer_ ""] (mempty :: Html ())
+expandToggleScript = genScript "expandToggle.js"
+selectTreeLinkScript = genScript "selectTreeLink.js"
+setSearchLimitScript = genScript "searchLimit.js"
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1746,9 +1763,9 @@ app appStateRef = do
         Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/"
   {- Set the amount of results from filter searches etc. Input <= 0 -> no limit -}
-  Scotty.post "/setSearchLimit" $ do
+  Scotty.get "/setSearchLimit" $ do
     state <- liftIO $ readIORef appStateRef
-    limit <- searchLimitParam Scotty.formParam
+    limit <- searchLimitParam Scotty.queryParam
     case state ^. majorState of 
       Connected socket debuggee' (PausedMode os) -> do
         let newResultSize = case limit of
@@ -1758,7 +1775,10 @@ app appStateRef = do
         let setLimit os' = os' { _resultSize = newResultSize }
             newAppState = updateAppState os setLimit socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/connect"
+        Scotty.text $ "Updated limit to: " <> case newResultSize of 
+                                                Nothing -> "unlimited"
+                                                Just n -> TL.pack $ show n
+        --Scotty.redirect "/connect"
       _ -> Scotty.redirect "/" 
 
   where mkSavedAndGCRootsIOTree debuggee' = do
