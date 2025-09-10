@@ -347,19 +347,19 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
         renderMImg cdio
 
-    form_ [ method_ "post", action_ "/takeSnapshot"
-          , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-      input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot name", required_ "required"]
-      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
-      button_ [type_ "submit"] "Take snapshot"
+    div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+      input_ [type_ "text", id_ "filenameInput", placeholder_ "Enter snapshot name"]
+      button_ [type_ "submit", onclick_ "submitSnapshot()"] "Take snapshot"
+      div_ [id_ "snapshotResult"] ""
+      takeSnapshotScript
 
     div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;" ] $ do
-      input_ [type_ "number", id_ "searchLimitInput", placeholder_ "Enter search limit", required_ "required"]
-      --input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+      input_ [type_ "number", id_ "searchLimitInput", placeholder_ "Enter search limit"]
       button_ [type_ "submit", onclick_ "submitSearchLimit()"] "Limit searches"
       toolTipSpan $ toHtmlRaw ("Default = 100<br>Enter 0 for unlimited searches" :: Text)
       div_ [id_ "limitResult"] ""
       setSearchLimitScript
+
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
       Retainer {} -> pack "Retainers"
@@ -1050,6 +1050,7 @@ genScript loc = script_ [src_ loc, defer_ ""] (mempty :: Html ())
 expandToggleScript = genScript "expandToggle.js"
 selectTreeLinkScript = genScript "selectTreeLink.js"
 setSearchLimitScript = genScript "searchLimit.js"
+takeSnapshotScript = genScript "takeSnapshot.js"
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1192,7 +1193,6 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
                           , GA $ NodeAttrs [Shape Circle, Width 0.05, Height 0.05, Margin (DVal 0.01) ]]
       let svgContent comm = liftIO $ do 
                               createDirectoryIfMissing True "tmp"
-                              --_ <- runGraphvizCommand comm (tweakGraph comm graph) Svg svgPath
                               _ <- graphvizProcess comm svgPath (tweakGraph comm graph)
                               return ()
       return $ Just $ ImgInfo name capped svgContent
@@ -1696,14 +1696,14 @@ app appStateRef = do
         Scotty.redirect "/thunkAnalysis"
       _ -> Scotty.redirect "/" 
   {- Take snapshot -}
-  Scotty.post "/takeSnapshot" $ do
+  Scotty.get "/takeSnapshot" $ do
     state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.formParam
-    filename <- Scotty.formParam "filename"
+    selectedPath <- selectedParam Scotty.queryParam
+    filename <- Scotty.queryParam "filename"
     case state ^. majorState of
       Connected _ debuggee' _ -> do
         liftIO $ snapshot debuggee' filename
-        Scotty.redirect ("/connect?selected=" <> TL.fromStrict (encodePath selectedPath))
+        Scotty.text $ "Saved snapshot named: " <> TL.pack filename 
       Setup{} -> Scotty.redirect "/" 
   {- Search with filters -}
   genericGet appStateRef "/searchWithFilters" undefined
