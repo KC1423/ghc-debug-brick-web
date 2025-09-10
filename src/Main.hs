@@ -1153,7 +1153,7 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
       let tweakGraph :: GraphvizCommand -> DotGraph Int -> DotGraph Int
           tweakGraph Dot g = g
           tweakGraph comm g = g { graphStatements = (graphStatements g) <> stmts }
-            where stmts = [ GA $ GraphAttrs [Overlap ScaleXYOverlaps, Sep (DVal 0.1), NodeSep 0.05, RankSep [0.05], K 0.01] 
+            where stmts = [ GA $ GraphAttrs [Overlap ScaleXYOverlaps, Sep (DVal 0.1), NodeSep 0.05, RankSep [0.05]] 
                           , GA $ NodeAttrs [Shape Circle, Width 0.05, Height 0.05, Margin (DVal 0.01) ]]
       let svgContent comm = liftIO $ do 
                               createDirectoryIfMissing True "tmp"
