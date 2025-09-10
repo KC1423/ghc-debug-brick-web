@@ -25,7 +25,7 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled, runGraphvizCommand, GraphvizCommand(..))
+import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled, runGraphvizCommand, GraphvizCommand(..), printDotGraph)
 import Data.GraphViz.Attributes.Complete (Attribute(URL, Height, Margin, Width, Shape, NodeSep, RankSep, Sep, Overlap, K), DPoint(DVal), Shape(Circle), Overlap(ScaleXYOverlaps))
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, GlobalAttributes(GraphAttrs, NodeAttrs), DotStatement(GA))
@@ -51,6 +51,8 @@ import Data.Maybe (catMaybes)
 import qualified Network.Wai.Middleware.Static as NWMS
 import Control.Concurrent.Async
 import Network.HTTP.Types (status409, status500)
+import System.Process
+import System.IO
 
 import Control.Applicative
 import Control.Monad (forM)
@@ -1141,6 +1143,22 @@ imgName :: CDIO -> String
 imgName (CDIO _ (Just ImgInfo{..}) _) = _name
 imgName _ = ""
 
+graphvizProcess comm outPath dotGraph = do
+  let cmd = case comm of
+              Dot ->  "dot"
+              _ -> "sfdp"
+      args = ["-Tsvg", "-o", outPath]
+  let processSpec = (proc cmd args)
+        { std_in = CreatePipe
+        , std_err = NoStream
+        }
+  withCreateProcess processSpec $ \(Just hIn) _ _ ph -> do
+    hSetBuffering hIn LineBuffering
+    hPutStrLn hIn (TL.unpack $ printDotGraph dotGraph)
+    hClose hIn
+    _ <- waitForProcess ph
+    return ()
+
 handleImg :: IOTreeNode a name -> Bool -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> (a -> String) -> Scotty.ActionM (Maybe ImgInfo)
 handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
   case getName'' n' of
@@ -1157,7 +1175,8 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
                           , GA $ NodeAttrs [Shape Circle, Width 0.05, Height 0.05, Margin (DVal 0.01) ]]
       let svgContent comm = liftIO $ do 
                               createDirectoryIfMissing True "tmp"
-                              _ <- runGraphvizCommand comm (tweakGraph comm graph) Svg svgPath
+                              --_ <- runGraphvizCommand comm (tweakGraph comm graph) Svg svgPath
+                              _ <- graphvizProcess comm svgPath (tweakGraph comm graph)
                               return ()
       return $ Just $ ImgInfo name capped svgContent
     Nothing -> return Nothing
