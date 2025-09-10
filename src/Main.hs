@@ -49,6 +49,8 @@ import Data.Aeson (encode, object, (.=))
 import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC, getSourceInfo)
 import Data.Maybe (catMaybes)
 import qualified Network.Wai.Middleware.Static as NWMS
+import Control.Concurrent.Async
+import Network.HTTP.Types (status409, status500)
 
 import Control.Applicative
 import Control.Monad (forM)
@@ -1117,6 +1119,7 @@ updateImg appStateRef (CDIO _ (Just ImgInfo{..}) _) = do
       let newOs = os { _genSvg = _svgContent }
       let newState = state { _majorState = Connected s d (PausedMode newOs) } 
       liftIO $ writeIORef appStateRef newState
+      liftIO $ print "updated gen function"
       return ()
     _ -> return ()
 updateImg _ _ = return ()
@@ -1127,10 +1130,11 @@ getCDIO tree selectedPath getName' getSize' nodeName format' =
       hasGV <- liftIO $ isGraphvizInstalled
       return $ CDIO Nothing Nothing hasGV 
     Just subtree -> do
+      liftIO $ print $ "got subtree: " ++ show selectedPath ++ " " ++ show (nodeName subtree) 
       (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName')
       let mInc = Just (getClosureIncSize getName' getSize' Set.empty expSubTree, capped)
       hasGV <- liftIO $ isGraphvizInstalled
-      if not hasGV then return $ CDIO mInc Nothing hasGV --(Just $ ImgInfo { _hasGV = False })
+      if not hasGV then return $ CDIO mInc Nothing hasGV
       else do
         imgInfo <- handleImg expSubTree capped nodeName getName' format'
         return $ CDIO mInc imgInfo hasGV
@@ -1266,6 +1270,7 @@ handleToggle newTree toggleIx selectedPath renderRow = do
     _ -> Scotty.html mempty
 
 handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
+  liftIO $ print $ "new selection: " ++ show selectedPath
   cdio <- getCDIO'
   updateImg appStateRef cdio
   let summaryHtml = renderText $ detailedSummary renderSummary tree selectedPath cdio
@@ -1281,13 +1286,52 @@ app appStateRef = do
     Scotty.file svgPath
   {- Generates the graph on demand -}
   Scotty.get "/graph" $ do
+    Scotty.addHeader "Cache-Control" "no-store, no-cache, must-revalidate, max-age=0"
+    Scotty.addHeader "Pragma" "no-cache"
+    Scotty.addHeader "Expires" "0"
+    liftIO $ print "entered graph handler"
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected _ _ (PausedMode os) -> do
+        mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
+          (st {currentTask = Nothing}, currentTask st)
+        case mOldTask of
+          Just oldTask -> do
+            done <- liftIO $ poll oldTask
+            case done of 
+              Nothing -> do
+                liftIO $ print "cancelling old task"
+                liftIO $ cancel oldTask
+              Just _ -> do
+                liftIO $ print "old task complete"
+                liftIO $ return ()
+          Nothing -> do
+            liftIO $ print "channel idle, running"
+            liftIO $ return ()
         fastMode <- fastModeParam Scotty.queryParam
-        liftIO $ _genSvg os (if fastMode then Fdp else Dot)
-    Scotty.setHeader "Content-Type" "image/svg+xml"
-    Scotty.file svgPath
+        newTask <- liftIO $ async $ do
+          liftIO $ print "starting"
+          liftIO $ _genSvg os (if fastMode then Fdp else Dot) 
+          --liftIO $ print "done"
+        liftIO $ atomicModifyIORef' appStateRef $ \st ->
+          (st {currentTask = Just newTask}, ())
+        result <- liftIO $ E.try (wait newTask) :: Scotty.ActionM (Either E.SomeException ())
+        case result of
+          Right _ -> do
+            Scotty.setHeader "Content-Type" "image/svg+xml"
+            Scotty.file svgPath
+          Left e -> do
+            case E.fromException e of
+              Just AsyncCancelled -> do
+                Scotty.status status409
+                liftIO $ putStrLn "Render task cancelled"
+                Scotty.text "cancelled"
+              _ -> do 
+                Scotty.status status500
+                liftIO $ putStrLn $ "Render task failed: " ++ show e
+                Scotty.text "failed"
+    --Scotty.setHeader "Content-Type" "image/svg+xml"
+    --Scotty.file svgPath
   {- Serves the profile dump file -}
   Scotty.get "/download-profile" $ do
     let filePath = "profile_dump"
@@ -1394,6 +1438,7 @@ app appStateRef = do
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
             cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+            liftIO $ print $ "about to update for the first time"  ++ show selectedPath
             updateImg appStateRef cdio
             Scotty.html $ renderConnectedPage selectedPath cdio socket debuggee' mode'
           _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing Nothing False) socket debuggee' mode'

@@ -9,6 +9,7 @@ function fastModeToggle() {
       container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
       document.getElementById('download-link').style.display = 'none';
     }
+    console.log("rendering due to change in toggle");
     fetchAndRender();
   }
 }
@@ -16,18 +17,25 @@ function fastModeToggle() {
 function fetchAndRender() {
   const container = document.getElementById('svg-container');
   if (!svgLoaded && container) {
+    console.log("   fetching and rendering");
     container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
 
     const fastCheckbox = document.getElementById('fastModeCheckbox')
-    console.log(fastCheckbox);
     const isFast = fastCheckbox?.checked;
-    console.log(isFast);
     const url = isFast ? '/graph?fastMode=True' : '/graph';
 
     fetch(url)
-      .then(res => res.text())
+      .then(res => {
+	if (!res.ok) {
+          return res.text().then(msg => {
+            throw new Error(msg);
+	  });
+	}
+	return res.text();
+      })
       .then(svg => {
         container.innerHTML = svg;
+	console.log("   fetched and set graph");
         document.getElementById('download-link').style.display = 'inline-block';
 
         const element = document.querySelector('#svg-container svg');
@@ -42,6 +50,11 @@ function fetchAndRender() {
         svgLoaded = true;
       })
       .catch(err => {
+	console.log('Caught error:', err);
+	if (err.message === 'cancelled') {
+          console.log('Render cancelled - staying in loading state');
+          return;
+	}
         console.error('Failed to load graph:', err);
         container.innerHTML = '<p style="color: red;">Failed to load graph.</p>';
       });
@@ -60,6 +73,7 @@ function toggleDiv() {
     btn.textContent = 'Hide';
     localStorage.setItem('toggleDivState', 'shown');
     if (!svgLoaded) {
+      console.log("rendering due to toggle of show/hide and graph not rendered already");
       fetchAndRender();
     }
   } else {
@@ -69,25 +83,8 @@ function toggleDiv() {
   }
 }
 
-function applyToggleState() {
-  const savedState = localStorage.getItem('toggleDivState');
-  const div = document.getElementById('toggleDiv');
-  const btn = document.getElementById('toggleButton');
-
-  const available = div?.dataset?.available !== "false";
-
-  if (savedState === 'shown' && available) {
-    div.style.display = 'block';
-    btn.textContent = 'Hide';
-    fetchAndRender();
-  } else {
-    div.style.display = 'none';
-    btn.textContent = 'Show';
-  }
-}
-
 function updateSummaries(pathStr) {
-  fetch(`/partial?selected=${encodeURIComponent(pathStr)}`)
+  return fetch(`/partial?selected=${encodeURIComponent(pathStr)}`)
     .then(res => res.json())
     .then(data => {
       document.getElementById("selection-summary").innerHTML = data.summary;
@@ -95,11 +92,10 @@ function updateSummaries(pathStr) {
       if (imgTitle) {
         imgTitle.innerHTML = data.imgName;
       }
-      applyToggleState();
-    })
-    .catch(err => {
-      console.error('Failed to update summaries:', err);
     });
+    /*.catch(err => {
+      console.error('Failed to update summaries:', err);
+    });*/
 }
 
 
@@ -119,7 +115,6 @@ function updateSelectionStyles(selectedPathStr) {
 }
 
 function updateSelection(pathStr) {
-  updateSummaries(pathStr);
   updateSelectionStyles(pathStr);
   svgLoaded = false;
 
@@ -131,9 +126,26 @@ function updateSelection(pathStr) {
       container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
       document.getElementById('download-link').style.display = 'none';
     }
+    updateSummaries(pathStr)
+      .then(() => {
+        fetchAndRender();
+      })
+      .catch(err => {
+        console.error('Failed to update summaries or render graph:', err);
+        container.innerHTML = '<p style="color: red;">Failed to update summaries or load graph.</p>';
+      });
+
+	  /*
     setTimeout(() => {
-      fetchAndRender();
-    }, 100);
+      if (!svgLoaded) {
+	console.log("rendering due to selection updated");
+        fetchAndRender();
+      }
+    }, 100);*/
+  } else {
+    updateSummaries(pathStr).catch(err => {
+      console.error('Failed to update summaries:', err);
+    });
   }
 }
 
@@ -162,6 +174,7 @@ document.addEventListener('DOMContentLoaded', function() {
       div.style.display = 'block';
       btn.textContent = 'Hide';
       svgLoaded = false;
+      console.log("rendering because dom reloaded")
       fetchAndRender();
     } else {
       div.style.display = 'none';

@@ -21,6 +21,7 @@ import Web.Scotty.Internal.Types
 import Lucid
 import qualified Data.Text.Lazy as TL
 import Data.GraphViz
+import Control.Concurrent.Async
 
 import Lens.Micro.Platform
 import Data.Time
@@ -48,10 +49,12 @@ initialAppState = AppState
       , _knownDebuggees = []
       , _knownSnapshots = []
       }
+  , currentTask = Nothing
   }
 
 data AppState = AppState
   { _majorState :: MajorState
+  , currentTask :: Maybe (Async ())
   }
 
 data Suggestions = Suggestions 
