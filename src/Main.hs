@@ -347,15 +347,15 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
         renderMImg cdio
 
-    div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-      input_ [type_ "text", id_ "filenameInput", placeholder_ "Enter snapshot name"]
-      button_ [type_ "submit", onclick_ "submitSnapshot()"] "Take snapshot"
+    form_ [ id_ "snapshotForm", style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+      input_ [type_ "text", id_ "filenameInput", placeholder_ "Enter snapshot name", required_ "required"]
+      button_ [type_ "submit"] "Take snapshot"
       div_ [id_ "snapshotResult"] ""
       takeSnapshotScript
 
-    div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;" ] $ do
-      input_ [type_ "number", id_ "searchLimitInput", placeholder_ "Enter search limit"]
-      button_ [type_ "submit", onclick_ "submitSearchLimit()"] "Limit searches"
+    form_ [ id_ "searchLimitForm", style_ "margin: 0; display: flex; align-items: center; gap: 8px;" ] $ do
+      input_ [type_ "number", id_ "searchLimitInput", placeholder_ "Enter search limit", required_ "required"]
+      button_ [type_ "submit"] "Limit searches"
       toolTipSpan $ toHtmlRaw ("Default = 100<br>Enter 0 for unlimited searches" :: Text)
       div_ [id_ "limitResult"] ""
       setSearchLimitScript
