@@ -65,14 +65,14 @@ nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))
 {- New code / web stuff -}
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
                                           -> [Int]
-                                          -> ([Int] -> [Int] -> Bool -> Bool -> node -> Html ())
+                                          -> ([Int] -> Bool -> Bool -> node -> Html ())
                                           -> ([Int] -> T.Text)
                                           -> Html ()
 renderIOTreeHtml (IOTree _ roots _) selectedPath renderRow encode =
   div_ [id_ "iotree"] $
     renderTreeNodesHtml renderRow selectedPath [] roots encode
   
-renderTreeNodesHtml :: ([Int] -> [Int] -> Bool -> Bool -> a -> Html ())
+renderTreeNodesHtml :: ([Int] -> Bool -> Bool -> a -> Html ())
                     -> [Int] -> [Int] -> [IOTreeNode a name] -> ([Int] -> T.Text) -> Html ()
 renderTreeNodesHtml renderRow selectedPath parentPath nodes encode = 
   mconcat $ zipWith renderOne [0..] nodes
@@ -83,7 +83,7 @@ renderTreeNodesHtml renderRow selectedPath parentPath nodes encode =
           expanded = case children of
                        Right _ -> True
                        Left _ -> False
-          rowHtml = renderRow selectedPath thisPath expanded selected content
+          rowHtml = renderRow thisPath expanded selected content
           childHtml =
             case children of
               Right cs -> 

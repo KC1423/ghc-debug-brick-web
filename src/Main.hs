@@ -336,8 +336,6 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-
-    
   
     div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
@@ -669,8 +667,8 @@ genFilterButtons' suggs exclude flavourText filterType = do
       \}"
 
         
-detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
-detailedRowHtml renderHtml name _ thisPath expanded selected obj =
+detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> Bool -> Bool -> a -> Html ()
+detailedRowHtml renderHtml name thisPath expanded selected obj =
   let depth = length thisPath
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
@@ -1302,7 +1300,7 @@ handleFilter appStateRef = do
       liftIO $ writeIORef appStateRef newAppState
     _ -> Scotty.redirect "/"
 
-handleToggle :: IOTree a name -> [Int] -> [Int] -> ([Int] -> [Int] -> Bool -> Bool -> a -> Html ())
+handleToggle :: IOTree a name -> [Int] -> [Int] -> ([Int] -> Bool -> Bool -> a -> Html ())
              -> Scotty.ActionM ()
 handleToggle newTree toggleIx selectedPath renderRow = do
   let mNode = getSubTree newTree toggleIx
