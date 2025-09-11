@@ -24,8 +24,8 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphvizCommand(..), toLabel, isGraphvizInstalled) 
-import Data.GraphViz.Attributes.Complete (Attribute(Overlap), Overlap(PrismOverlap))
+import Data.GraphViz (GraphvizCommand(..), toLabel, isGraphvizInstalled, style, filled, color, X11Color(Yellow, Red, Green, GreenYellow), fillColor) 
+import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL), Overlap(PrismOverlap))
 import Data.GraphViz.Types
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, DotStatement(GA))
@@ -766,10 +766,10 @@ renderCC Debug.CCPayload{..} = do
   summaryEntry "Time ticks" (show ccTimeTicks)
   summaryEntry "Is CAF" (show ccIsCaf)
 
-getClosureIncSize :: (a -> Maybe String) -> (a -> Int) -> Set.Set String -> IOTreeNode a name -> Int
+getClosureIncSize :: (a -> Maybe String) -> (a -> Int) -> Set.Set String -> IOTreeNode (a, [Int], Bool) name -> Int
 getClosureIncSize getName' getSize' seen' node' = fst (go seen' node')
   where
-    go seen (IOTreeNode n csE) =
+    go seen (IOTreeNode (n, _, _) csE) =
       case getName' n of
         Nothing -> case csE of 
                      Left _ -> (0, seen)
@@ -785,20 +785,25 @@ getClosureIncSize getName' getSize' seen' node' = fst (go seen' node')
       where step (acc, st) x = let (a, st') = f st x in (acc + a, st') 
 
 type EdgeList = [(String, String, Int)]
+data NodeInfo = NodeInfo
+  { formatted :: String
+  , path :: [Int]
+  , expanded :: Bool
+  }
 
-getClosureVizTree :: (a -> String) -> (a -> String) -> Set.Set String -> [(String, String)] -> EdgeList -> IOTreeNode a name -> (Set.Set String, [(String, String)], EdgeList)
-getClosureVizTree getName' format' nodes formattedNodes edges (IOTreeNode n csE) = 
+getClosureVizTree :: (a -> String) -> (a -> String) -> Set.Set String -> [(String, NodeInfo)] -> EdgeList -> IOTreeNode (a, [Int], Bool) name -> (Set.Set String, [(String, NodeInfo)], EdgeList)
+getClosureVizTree getName' format' nodes formattedNodes edges (IOTreeNode (n, path, expanded) csE) = 
   let ptr = getName' n
   in if Set.member ptr nodes
      then (nodes, formattedNodes, [])
      else case csE of
-            Left _ -> (Set.insert ptr nodes, (ptr, format' n) : formattedNodes, [])
+            Left _ -> (Set.insert ptr nodes, (ptr, (NodeInfo (format' n) path False)) : formattedNodes, [])
             Right cs -> 
               let nodes'' = Set.insert ptr nodes
-                  fnodes'' = (ptr, format' n) : formattedNodes
+                  fnodes'' = (ptr, NodeInfo (format' n) path expanded) : formattedNodes
                   (nodesFinal, fNodesFinal, childEdges) = listApply (getClosureVizTree getName' format') (nodes'', fnodes'', edges) cs
                   children = [ getName' n'
-                             | IOTreeNode n' _ <- cs ]
+                             | IOTreeNode (n', _, _) _ <- cs ]
                   newEdges = map (\(ch, i) -> (ptr, ch, i)) (zip children [0..])
               in (nodesFinal, fNodesFinal, childEdges ++ newEdges)
   where
@@ -911,13 +916,17 @@ filterChangedParam getParam = readParam "filterChanged" getParam (maybe False id
 fastModeParam :: Data.String.IsString t => ParamGet t Bool
 fastModeParam getParam = readParam "fastMode" getParam (maybe False id . readMaybe) False
 
-buildClosureGraph :: [String] -> [(String, String)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
+buildClosureGraph :: [String] -> [(String, NodeInfo)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
   -- possible style for source node, except this logic doesn't always select the source node
   -- nids@((sn, sid):rest)
   --node sid [toLabel (pack sn :: Text), Data.GraphViz.style filled, fillColor Yellow, color Red]
-  mapM_ (\(n, nid) -> node nid [toLabel (pack (maybe "" id (lookup n fnodes)) :: Text)
-                               {-, URL (TL.pack $ "https://localhost:3000/blah/" ++ show nid)-}]) nids
+  mapM_ (\(n, nid) -> 
+            let NodeInfo fNode path expanded = maybe (NodeInfo "" [] False) id (lookup n fnodes)
+            in node nid $ [toLabel (pack fNode :: Text)
+                          , URL (TL.pack $ "https://localhost:3000/blah/"
+                                 ++ T.unpack (encodePath path))]
+                          ++ if path == [0] then [Data.GraphViz.style filled, if expanded then fillColor Yellow else fillColor GreenYellow, color Red] else if not expanded then [Data.GraphViz.style filled, fillColor Green] else []) nids
   mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
                       (Just x, Just y) -> edge x y [toLabel (pack (show eid) :: Text)]
                       z -> error ("Error in building closure graph: " ++ 
@@ -1071,14 +1080,11 @@ genericGet appStateRef index renderPage = do
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
                Retainer tree' suggs -> do
-                 cdio <- getCDIO tree' selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+                 cdio <- getCDIO tree' selectedPath (Just . closureName) closureGetSize closureFormat
                  updateImg appStateRef cdio
                  Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath cdio
                SearchedHtml u@(Utils{..}) tree name -> do
-                 let nameFn = maybe "" id . _getName 
-                 cdio <- getCDIO tree selectedPath _getName _getSize
-                         (\(IOTreeNode n' _) -> nameFn n') _graphFormat
-                 
+                 cdio <- getCDIO tree selectedPath _getName _getSize _graphFormat
                  updateImg appStateRef cdio
                  Scotty.html $ renderPage u tree name selectedPath cdio
           RunningMode -> Scotty.redirect "/connect"
@@ -1124,8 +1130,6 @@ handleConnect appStateRef state formValue options isValid' connect = do
         else Scotty.html renderBadSocketPage
     Nothing -> Scotty.html renderBadSocketPage
 
-getNodeName :: IOTreeNode ClosureDetails name -> String
-getNodeName (IOTreeNode n _) = closureName n
 closureName :: ClosureDetails -> String
 closureName (ClosureDetails c _ _) = closureShowAddress c 
 closureName (InfoDetails inf) = T.unpack (_labelInParent inf)
@@ -1145,20 +1149,20 @@ updateImg appStateRef (CDIO _ (Just ImgInfo{..}) _) = do
     _ -> return ()
 updateImg _ _ = return ()
 
-getCDIO :: IOTree a name -> [Int] -> (a -> Maybe String) -> (a -> Int)
-        -> (IOTreeNode a name -> String) -> (a -> String) -> ActionT IO CDIO
-getCDIO tree selectedPath getName' getSize' nodeName format' = 
+--getCDIO :: forall a . IOTree a Name -> [Int] -> (a -> Maybe String) -> (a -> Int)
+--        -> (IOTreeNode a Name -> String) -> (a -> String) -> ActionT IO CDIO
+getCDIO tree selectedPath getName' getSize' format' = 
   case getSubTree tree selectedPath of
     Nothing -> do
       hasGV <- liftIO $ isGraphvizInstalled
-      return $ CDIO Nothing Nothing hasGV 
+      return $ CDIO Nothing Nothing hasGV
     Just subtree -> do
       (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName')
       let mInc = Just (getClosureIncSize getName' getSize' Set.empty expSubTree, capped)
       hasGV <- liftIO $ isGraphvizInstalled
       if not hasGV then return $ CDIO mInc Nothing hasGV
       else do
-        imgInfo <- handleImg expSubTree capped nodeName getName' format'
+        imgInfo <- handleImg expSubTree capped getName' format'
         return $ CDIO mInc imgInfo hasGV
 
 imgName :: CDIO -> String
@@ -1183,12 +1187,12 @@ graphvizProcess comm outPath dotGraph = do
     _ <- waitForProcess ph
     return ()
 
-handleImg :: IOTreeNode a name -> Bool -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> (a -> String) -> Scotty.ActionM (Maybe ImgInfo)
-handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
+handleImg :: IOTreeNode (a, [Int], Bool) name -> Bool -> (a -> Maybe String) -> (a -> String) -> Scotty.ActionM (Maybe ImgInfo)
+handleImg expSubtree@(IOTreeNode n''@(n', path, expanded) _) capped getName'' format' = do
   case getName'' n' of
     Just _ -> do 
       let getName' = maybe "" id . getName''
-      let name = nodeName expSubtree
+      let name = getName' n'
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
       let graph = buildClosureGraph vizNodes fNodes vizEdges
@@ -1447,17 +1451,15 @@ app appStateRef = do
           SavedAndGCRoots -> do
             let tree = _treeSavedAndGCRoots os
             let getCDIO' = getCDIO tree selectedPath (Just . closureName)
-                           closureGetSize getNodeName closureFormat
+                           closureGetSize closureFormat
             handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
           Retainer tree _ -> do
             let getCDIO' = getCDIO tree selectedPath (Just . closureName)
-                           closureGetSize getNodeName closureFormat
+                           closureGetSize closureFormat
             handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
 
           SearchedHtml Utils{..} tree _ -> do
-            let nameFn = maybe "" id . _getName 
-            let getCDIO' = getCDIO tree selectedPath _getName _getSize 
-                           (\(IOTreeNode n' _) -> nameFn n') _graphFormat
+            let getCDIO' = getCDIO tree selectedPath _getName _getSize _graphFormat
             handlePartial appStateRef tree selectedPath getCDIO' _renderSummary
       _ -> Scotty.redirect "/"
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
@@ -1469,7 +1471,7 @@ app appStateRef = do
         case mode' of 
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
-            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
+            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize closureFormat
             updateImg appStateRef cdio
             Scotty.html $ renderConnectedPage selectedPath cdio socket debuggee' mode'
           _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing Nothing False) socket debuggee' mode'
