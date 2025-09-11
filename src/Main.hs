@@ -20,19 +20,18 @@ module Main where
 import qualified Web.Scotty as Scotty
 import Data.IORef
 import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled, runGraphvizCommand, GraphvizCommand(..), printDotGraph)
-import Data.GraphViz.Attributes.Complete (Attribute(URL, Height, Margin, Width, Shape, NodeSep, RankSep, Sep, Overlap, K), DPoint(DVal), Shape(Circle), Overlap(ScaleXYOverlaps, PrismOverlap))
+import Data.GraphViz (GraphvizCommand(..), toLabel, isGraphvizInstalled) 
+import Data.GraphViz.Attributes.Complete (Attribute(Overlap), Overlap(PrismOverlap))
+import Data.GraphViz.Types
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
-import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, GlobalAttributes(GraphAttrs, NodeAttrs), DotStatement(GA))
+import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, DotStatement(GA))
 import Web.Scotty.Internal.Types
 import Data.Functor.Identity (Identity)
 import Data.String (IsString)
-import Debug.Trace
 import qualified Codec.Picture as JP
 import qualified Graphics.Rasterific as RA
 import qualified Graphics.Rasterific.Texture as RA
@@ -671,13 +670,12 @@ genFilterButtons' suggs exclude flavourText filterType = do
 
         
 detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
-detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
+detailedRowHtml renderHtml name _ thisPath expanded selected obj =
   let depth = length thisPath
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
       styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
       pathStr = encodePath thisPath
-      selectedStr = encodePath selectedPath
       linkStyle = "color: " ++ (if selected then "purple" else "blue") ++ "; text-decoration: none;"
       dataPathAttr = data_ "path" pathStr
   in div_ [class_ classStr, styleAttr] $ do
@@ -1046,10 +1044,15 @@ toRGBA8 c =
   in JP.PixelRGBA8 (fromIntegral r) (fromIntegral g) (fromIntegral b) 255
 
 
+genScript :: Text -> HtmlT Identity ()
 genScript loc = script_ [src_ loc, defer_ ""] (mempty :: Html ())
+expandToggleScript :: HtmlT Identity () 
 expandToggleScript = genScript "expandToggle.js"
+selectTreeLinkScript :: HtmlT Identity () 
 selectTreeLinkScript = genScript "selectTreeLink.js"
+setSearchLimitScript :: HtmlT Identity () 
 setSearchLimitScript = genScript "searchLimit.js"
+takeSnapshotScript :: HtmlT Identity () 
 takeSnapshotScript = genScript "takeSnapshot.js"
 
 svgPath :: String
@@ -1132,6 +1135,7 @@ closureName (LabelNode l) = T.unpack l
 closureName (CCSDetails clabel _ _) = T.unpack $ clabel
 closureName (CCDetails clabel _) = T.unpack $ clabel
 
+updateImg :: IORef AppState -> CDIO -> Scotty.ActionM ()
 updateImg appStateRef (CDIO _ (Just ImgInfo{..}) _) = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
@@ -1143,6 +1147,8 @@ updateImg appStateRef (CDIO _ (Just ImgInfo{..}) _) = do
     _ -> return ()
 updateImg _ _ = return ()
 
+getCDIO :: IOTree a name -> [Int] -> (a -> Maybe String) -> (a -> Int)
+        -> (IOTreeNode a name -> String) -> (a -> String) -> ActionT IO CDIO
 getCDIO tree selectedPath getName' getSize' nodeName format' = 
   case getSubTree tree selectedPath of
     Nothing -> do
@@ -1161,6 +1167,8 @@ imgName :: CDIO -> String
 imgName (CDIO _ (Just ImgInfo{..}) _) = _name
 imgName _ = ""
 
+graphvizProcess :: Data.GraphViz.Types.PrintDotRepr dg n =>
+                         GraphvizCommand -> [Char] -> dg n -> IO ()
 graphvizProcess comm outPath dotGraph = do
   let cmd = case comm of
               Dot ->  "dot"
@@ -1188,7 +1196,7 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
       let graph = buildClosureGraph vizNodes fNodes vizEdges
       let tweakGraph :: GraphvizCommand -> DotGraph Int -> DotGraph Int
           tweakGraph Dot g = g
-          tweakGraph comm g = g { graphStatements = (graphStatements g) <> stmts }
+          tweakGraph _ g = g { graphStatements = (graphStatements g) <> stmts }
             where stmts = [ GA $ GraphAttrs [Overlap (PrismOverlap Nothing)] ] 
       let svgContent comm = liftIO $ do 
                               createDirectoryIfMissing True "tmp"
@@ -1278,7 +1286,7 @@ reconnect appStateRef = do
       liftIO $ writeIORef appStateRef newAppState
     _ -> return ()
 
-handleFilter :: MonadIO m => IORef AppState -> m ()
+handleFilter :: IORef AppState -> Scotty.ActionM ()
 handleFilter appStateRef = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
@@ -1292,7 +1300,10 @@ handleFilter appStateRef = do
       let newTM = Retainer tree suggs
           newAppState = updateAppState os (setTM newTM) socket debuggee' state
       liftIO $ writeIORef appStateRef newAppState
+    _ -> Scotty.redirect "/"
 
+handleToggle :: IOTree a name -> [Int] -> [Int] -> ([Int] -> [Int] -> Bool -> Bool -> a -> Html ())
+             -> Scotty.ActionM ()
 handleToggle newTree toggleIx selectedPath renderRow = do
   let mNode = getSubTree newTree toggleIx
   case mNode of
@@ -1302,6 +1313,9 @@ handleToggle newTree toggleIx selectedPath renderRow = do
       Scotty.html htmlResponse    
     _ -> Scotty.html mempty
 
+handlePartial :: (Ord name, Show name)
+              => IORef AppState -> IOTree a name -> [Int] -> ActionT IO CDIO
+              -> (a -> [Int] -> CDIO -> Html ()) -> ActionT IO ()
 handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
   cdio <- getCDIO'
   updateImg appStateRef cdio
@@ -1353,6 +1367,7 @@ app appStateRef = do
                 Scotty.status status500
                 liftIO $ putStrLn $ "Render task failed: " ++ show e
                 Scotty.text "failed"
+      _ -> Scotty.redirect "/"
   {- Serves the profile dump file -}
   Scotty.get "/download-profile" $ do
     let filePath = "profile_dump"
@@ -1429,26 +1444,24 @@ app appStateRef = do
     state <- liftIO $ readIORef appStateRef
     selectedPath <- selectedParam Scotty.queryParam
     case state ^. majorState of
-      Connected socket debuggee' (PausedMode os) ->
+      Connected _ _ (PausedMode os) ->
         case _treeMode os of
           SavedAndGCRoots -> do
             let tree = _treeSavedAndGCRoots os
             let getCDIO' = getCDIO tree selectedPath (Just . closureName)
                            closureGetSize getNodeName closureFormat
             handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
-          Retainer tree suggs -> do
+          Retainer tree _ -> do
             let getCDIO' = getCDIO tree selectedPath (Just . closureName)
                            closureGetSize getNodeName closureFormat
             handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
 
-          SearchedHtml Utils{..} tree name -> do
+          SearchedHtml Utils{..} tree _ -> do
             let nameFn = maybe "" id . _getName 
             let getCDIO' = getCDIO tree selectedPath _getName _getSize 
                            (\(IOTreeNode n' _) -> nameFn n') _graphFormat
             handlePartial appStateRef tree selectedPath getCDIO' _renderSummary
-
-
-            
+      _ -> Scotty.redirect "/"
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
@@ -1532,8 +1545,6 @@ app appStateRef = do
   Scotty.get "/toggle" $ do
     toggleIx <- togglePathParam Scotty.queryParam
     selectedPath <- selectedParam Scotty.queryParam
-    let newSelected = toggleSelected selectedPath toggleIx
-    let selectedStr = encodePath newSelected
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected socket debuggee' (PausedMode os) -> do
@@ -1554,6 +1565,7 @@ app appStateRef = do
             let newAppState = updateAppState os (setTM $ SearchedHtml f newTree name) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
             handleToggle newTree toggleIx selectedPath (detailedRowHtml (_renderRow f) name) 
+      _ -> Scotty.redirect "/"
   {- View profile (level 1 and 2) -}
   genericGet appStateRef "/profile" renderProfilePage
   Scotty.post "/profile" $ do
@@ -1697,7 +1709,6 @@ app appStateRef = do
   {- Take snapshot -}
   Scotty.get "/takeSnapshot" $ do
     state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.queryParam
     filename <- Scotty.queryParam "filename"
     case state ^. majorState of
       Connected _ debuggee' _ -> do
@@ -1745,7 +1756,7 @@ app appStateRef = do
         let newFilters = case index of
                            n | n < 0 -> _filters os 
                            _ -> let (as, bs) = Prelude.splitAt index (_filters os) 
-                                in as ++ (tail bs)
+                                in as ++ (drop 1 bs)
             newAppState = updateAppState os (setFilters newFilters) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
         handleFilter appStateRef

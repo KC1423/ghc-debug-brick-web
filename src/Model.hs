@@ -19,7 +19,6 @@ import Network.Socket as NS
 import Control.Exception (try, SomeException)
 import Web.Scotty.Internal.Types
 import Lucid
-import qualified Data.Text.Lazy as TL
 import Data.GraphViz
 import Control.Concurrent.Async
 

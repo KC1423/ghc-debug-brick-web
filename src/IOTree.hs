@@ -21,8 +21,6 @@ module IOTree
 import Lucid
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Data.List
-import Debug.Trace
 
 -- A tree style list where items can be expanded and collapsed
 data IOTree node name = IOTree
