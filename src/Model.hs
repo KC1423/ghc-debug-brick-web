@@ -19,7 +19,8 @@ import Network.Socket as NS
 import Control.Exception (try, SomeException)
 import Web.Scotty.Internal.Types
 import Lucid
-import qualified Data.Text.Lazy as TL
+import Data.GraphViz
+import Control.Concurrent.Async
 
 import Lens.Micro.Platform
 import Data.Time
@@ -47,10 +48,12 @@ initialAppState = AppState
       , _knownDebuggees = []
       , _knownSnapshots = []
       }
+  , currentTask = Nothing
   }
 
 data AppState = AppState
   { _majorState :: MajorState
+  , currentTask :: Maybe (Async ())
   }
 
 data Suggestions = Suggestions 
@@ -136,13 +139,13 @@ data ClosureDetails = ClosureDetails
 data ImgInfo = ImgInfo
   { _name :: String 
   , _capped :: Bool
-  , _svgContent :: IO TL.Text 
-  , _hasGV :: Bool
+  , _svgContent :: GraphvizCommand -> IO ()
   }
 
 data CDIO = CDIO 
   { _mInc :: Maybe (Int, Bool)
   , _imgInfo :: Maybe ImgInfo
+  , _hasGV :: Bool
   }
 
 data Utils a = Utils {
@@ -190,7 +193,7 @@ data OperationalState = OperationalState
     , _resultSize :: Maybe Int
     , _filters :: [UIFilter]
     , _version :: GD.Version
-    , _genSvg :: IO TL.Text
+    , _genSvg :: GraphvizCommand -> IO ()
     }
 
 clearFilters :: OperationalState -> OperationalState

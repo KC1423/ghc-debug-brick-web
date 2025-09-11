@@ -20,19 +20,18 @@ module Main where
 import qualified Web.Scotty as Scotty
 import Data.IORef
 import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphID(Str), toLabel, runGraphviz, GraphvizOutput(Svg), isGraphvizInstalled)
-import Data.GraphViz.Attributes.Complete (Attribute(URL))
+import Data.GraphViz (GraphvizCommand(..), toLabel, isGraphvizInstalled) 
+import Data.GraphViz.Attributes.Complete (Attribute(Overlap), Overlap(PrismOverlap))
+import Data.GraphViz.Types
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
-import Data.GraphViz.Types.Generalised (DotGraph)
+import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, DotStatement(GA))
 import Web.Scotty.Internal.Types
 import Data.Functor.Identity (Identity)
 import Data.String (IsString)
-import Debug.Trace
 import qualified Codec.Picture as JP
 import qualified Graphics.Rasterific as RA
 import qualified Graphics.Rasterific.Texture as RA
@@ -45,9 +44,14 @@ import Network.Wai.Parse (FileInfo(..))
 import Eventlog.Data (generateJsonValidate, HeapProfileData(..), eventlogHeapProfile, generateJson)
 import Eventlog.HtmlTemplate (templateString)
 import qualified Eventlog.Args as EA
-import Data.Aeson (encode)
+import Data.Aeson (encode, object, (.=))
 import GHC.Debug.Client.Query (dereferenceConDesc, dereferenceCCS, dereferenceCC, getSourceInfo)
 import Data.Maybe (catMaybes)
+import qualified Network.Wai.Middleware.Static as NWMS
+import Control.Concurrent.Async
+import Network.HTTP.Types (status409, status500)
+import System.Process
+import System.IO
 
 import Control.Applicative
 import Control.Monad (forM)
@@ -55,7 +59,7 @@ import Control.Monad.IO.Class
 import qualified Data.List as List
 import Data.Ord (comparing)
 import qualified Data.Ord as Ord
-import Lens.Micro.Platform
+import Lens.Micro.Platform ((^.), (&), (.~), (%~))
 import System.Directory
 import System.FilePath
 import Data.Bool
@@ -282,7 +286,7 @@ tabs =
   , Tab "ARR_WORDS Count" "/arrWordsCount"
   , Tab "Strings Count" "/stringsCount"
   , Tab "Thunk Analysis" "/thunkAnalysis"
-  , Tab "Search with filters" "/searchWithFilters"
+  , Tab "Search retainers" "/searchWithFilters"
   ]
 
 pageLayout :: Text -> Html () -> Html ()
@@ -332,8 +336,6 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       button_ "Resume process"
     form_ [method_ "post", action_ "/exit"] $
       button_ "Exit"
-
-    
   
     div_ [ style_ "display: flex; gap: 2rem; align-items: flex-start;" ] $ do
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
@@ -342,18 +344,18 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       div_ [ style_ "flex: 1; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;" ] $ do
         renderMImg cdio
 
-    form_ [ method_ "post", action_ "/takeSnapshot"
-          , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-      input_ [type_ "text", name_ "filename", placeholder_ "Enter snapshot name", required_ "required"]
-      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+    form_ [ id_ "snapshotForm", style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+      input_ [type_ "text", id_ "filenameInput", placeholder_ "Enter snapshot name", required_ "required"]
       button_ [type_ "submit"] "Take snapshot"
+      div_ [id_ "snapshotResult"] ""
+      takeSnapshotScript
 
-    form_ [ method_ "post", action_ "/setSearchLimit"
-          , style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-      input_ [type_ "text", name_ "index", placeholder_ "Enter search limit", required_ "required"]
-
-      input_ [type_ "hidden", name_ "selected", value_ (encodePath selectedPath)]
+    form_ [ id_ "searchLimitForm", style_ "margin: 0; display: flex; align-items: center; gap: 8px;" ] $ do
+      input_ [type_ "number", id_ "searchLimitInput", placeholder_ "Enter search limit", required_ "required"]
       button_ [type_ "submit"] "Limit searches"
+      toolTipSpan $ toHtmlRaw ("Default = 100<br>Enter 0 for unlimited searches" :: Text)
+      div_ [id_ "limitResult"] ""
+      setSearchLimitScript
 
     h3_ $ toHtml $ case os ^. treeMode of
       SavedAndGCRoots {} -> pack "Root Closures"
@@ -361,8 +363,24 @@ renderConnectedPage selectedPath cdio socket _ mode' = renderText $ case mode' o
       SearchedHtml {} -> pack "Search Results"
     
     --table_ [style_ "border-collapse: collapse; width: 100%;"] $ do
-    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect")
-    autoScrollScript
+    renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "connect") encodePath
+    expandToggleScript
+    selectTreeLinkScript
+   
+toolTipSpan :: Html () -> Html ()
+toolTipSpan msg =
+  -- Tooltip container span
+  span_ 
+    [ style_ "display: inline-block; position: relative; margin-left: 8px; cursor: pointer; font-weight: bold; border: 1px solid #ccc; border-radius: 50%; width: 18px; height: 18px; text-align: center; line-height: 18px; background-color: #eee;"
+    , onmouseover_ "this.querySelector('span').style.visibility='visible'; this.querySelector('span').style.opacity='1';"
+    , onmouseout_ "this.querySelector('span').style.visibility='hidden'; this.querySelector('span').style.opacity='0';"
+    ] $ do
+      "?"
+      -- Tooltip text span
+      span_ 
+        [ style_ "visibility: hidden; width: 160px; background-color: black; color: white; text-align: center; border-radius: 6px; padding: 5px 0; position: absolute; z-index: 1; bottom: 125%; left: 50%; margin-left: -80px; opacity: 0; transition: opacity 0.3s;"
+        ] $ msg
+
 
 renderClosureSummary :: ClosureDetails -> [Int] -> CDIO -> Html ()
 renderClosureSummary node' path CDIO{..} =
@@ -392,7 +410,7 @@ detailedSummary :: (Ord name, Show name)
                 => (a -> [Int] -> CDIO -> Html ())
                 -> IOTree a name -> [Int] -> CDIO -> Html ()
 detailedSummary f tree path cdio =
-  div_ [class_ "selection-summary"] $ do
+  div_ [id_ "selection-summary"] $ do
     case getSubTree tree path of
       Nothing -> mempty
       Just (IOTreeNode node' _) -> f node' path cdio
@@ -483,21 +501,30 @@ renderIncSize incSize capped _ = do
   else mempty-}
 
 renderMImg :: CDIO -> Html ()
-renderMImg CDIO {..} = 
-  case _imgInfo of
-    Nothing -> mempty
-    Just ImgInfo{..} ->
-      if not _hasGV 
-        then do
-          h3_ "You don't have Graphviz installed, which is required to display visualisations of closures" 
-          p_ "Run sudo apt install graphviz"
-        else renderImgPage _name _capped
+renderMImg CDIO {..} = do 
+  if not _hasGV 
+    then do
+      h3_ "You don't have Graphviz installed, which is required to display visualisations of closures" 
+      p_ "Run sudo apt install graphviz"
+    else case _imgInfo of
+      Nothing -> renderEmptyImgPanel
+      Just ImgInfo{..} -> renderImgPage _name _capped
+  script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
+
+renderEmptyImgPanel :: Html ()
+renderEmptyImgPanel = do
+  div_ [style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+    h3_ [id_ "image-title"] "Visualisation"
+    button_ [id_ "toggleButton", onclick_ "toggleDiv()", disabled_ "true"] "Show" 
+  div_ [id_ "toggleDiv", style_ "display: none;", data_ "available" "false"] mempty
 
 renderImgPage :: String -> Bool -> Html () 
 renderImgPage name capped = do
   div_ [ style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
-    h3_ $ toHtml $ "Visualisation of " ++ name
+    h3_ [id_ "image-title"] $ toHtml $ "Visualisation of " ++ name
     button_ [ id_ "toggleButton", onclick_ "toggleDiv()" ] "Show"
+    label_ [for_ "fastModeCheckbox"] " Fast mode: "
+    input_ [type_ "checkbox", id_ "fastModeCheckbox", onchange_ "fastModeToggle()"]
   if capped then p_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
   div_ [ id_ "toggleDiv", style_ "display: none;" ] $ do 
     body_ $ do
@@ -509,71 +536,16 @@ renderImgPage name capped = do
       -- this code renders the svg with JS so it is interactive
       div_ [id_ "svg-container", style_ "border: 1px solid #ccc; width: 100%; max-width: 800px; height: 80vh; overflow: hidden;"] $ 
         mempty
-    script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
-    script_ $ mconcat
-      [ "let svgLoaded = false;\n"
-      , "function fetchAndRender() {"
-      , "  if (!svgLoaded) {\n"
-      , "    const container = document.getElementById('svg-container');\n"
-      , "    container.innerHTML = '<p style=\"font-style: italic; color: #555; \">Loading graph...</p>';"
-      , "    fetch('/graph')\n"
-      , "      .then(res => res.text())\n"
-      , "      .then(svg => {\n"
-      , "        document.getElementById('svg-container').innerHTML = svg;\n"
-      , "        document.getElementById('download-link').style.display = 'inline-block';\n"
-      , "        const element = document.querySelector('#svg-container svg');\n"
-      , "        panzoom(element, {\n"
-      , "          bounds: true,\n"
-      , "          boundsPadding: 0.1,\n"
-      , "          zoomDoubleClickSpeed: 1,\n"
-      , "          maxZoom: 10,\n"
-      , "          minZoom: 0.1\n"
-      , "        });\n"
-      , "        svgLoaded = true;\n"
-      , "      })\n"
-      , "      .catch(err => {\n"
-      , "        console.error('Failed to load graph:', err);\n"
-      , "        document.getElementById('svg-container').innerText = 'Failed to load graph.';\n"
-      , "      });\n"
-      , "  }"
-      , "}"
-      , "function toggleDiv() {\n"
-      , "  const div = document.getElementById('toggleDiv');\n"
-      , "  const btn = document.getElementById('toggleButton');\n"
-      , "  if (div.style.display === 'none') {\n"
-      , "    div.style.display = 'block';\n"
-      , "    btn.textContent = 'Hide';\n"
-      , "    localStorage.setItem('toggleDivState', 'shown');\n"
-      , "    fetchAndRender();"
-      , "  } else {\n"
-      , "    div.style.display = 'none';\n"
-      , "    btn.textContent = 'Show';\n"
-      , "    localStorage.setItem('toggleDivState', 'hidden');\n"
-      , "  }\n"
-      , "}\n"
-      , "document.addEventListener('DOMContentLoaded', function() {\n"
-      , "  const div = document.getElementById('toggleDiv');\n"
-      , "  const btn = document.getElementById('toggleButton');\n"
-      , "  const state = localStorage.getItem('toggleDivState');\n"
-      , "  if (state === 'shown') {\n"
-      , "    div.style.display = 'block';\n"
-      , "    btn.textContent = 'Hide';\n"
-      , "    fetchAndRender();"
-      , "  } else {\n"
-      , "    div.style.display = 'none';\n"
-      , "    btn.textContent = 'Show';\n"
-      , "  }\n"
-      , "});\n"
-      ]
-      
+
 genericTreeBody :: (Ord name, Show name) => IOTree node name -> [Int] -> (node -> Html ())
                 -> (node -> [Int] -> CDIO -> Html ()) -> String -> CDIO
                 -> HtmlT Identity ()
 genericTreeBody tree selectedPath renderRow renderSummary' name cdio = do
   detailedSummary renderSummary' tree selectedPath cdio
   h3_ "Results"
-  renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name)
-  autoScrollScript
+  renderIOTreeHtml tree selectedPath (detailedRowHtml renderRow name) encodePath
+  expandToggleScript
+  selectTreeLinkScript
 
 renderProfilePage :: (Show name, Ord name) => Utils a -> IOTree a name -> String
                   -> [Int] -> CDIO -> TL.Text
@@ -628,8 +600,9 @@ renderFilterSearchPage tree Suggestions{..} filters' dbgVersion selectedPath cdi
         button_ [type_ "submit"] "Clear all filters"    
    
 
-  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters")
-  autoScrollScript
+  renderIOTreeHtml tree selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters") encodePath
+  expandToggleScript
+  selectTreeLinkScript
 
 
 genFilterButtons :: String -> String -> Html ()
@@ -694,22 +667,25 @@ genFilterButtons' suggs exclude flavourText filterType = do
       \}"
 
         
-detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> [Int] -> Bool -> Bool -> a -> Html ()
-detailedRowHtml renderHtml name selectedPath thisPath expanded selected obj =
+detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> Bool -> Bool -> a -> Html ()
+detailedRowHtml renderHtml name thisPath expanded selected obj =
   let depth = length thisPath
       indentPx = depth * 20
       classStr = "tree-row" <> if selected then " selected" else ""
       styleAttr = style_ $ pack ("margin-left: " <> show indentPx <> "px; display: flex; align-items: center; gap: 4px;")
       pathStr = encodePath thisPath
-      selectedStr = encodePath selectedPath
       linkStyle = "color: " ++ (if selected then "purple" else "blue") ++ "; text-decoration: none;"
+      dataPathAttr = data_ "path" pathStr
   in div_ [class_ classStr, styleAttr] $ do
-       form_ [method_ "post", action_ "/toggle", style_ "margin: 0;"] $ do
-         input_ [type_ "hidden", name_ "toggle", value_ pathStr]
-         input_ [type_ "hidden", name_ "selected", value_ selectedStr]
-         button_ [type_ "submit", class_ "expand-button"] $
-           toHtml $ if expanded then "+" else "-" :: String
-       a_ [href_ ("/" <> pack name <> "?selected=" <> pathStr), style_ (pack $ linkStyle)] $ renderHtml obj
+       form_ [style_ "margin: 0;", class_ "expand-form", dataPathAttr] $ do
+         button_ 
+           [ type_ "button"
+           , class_ "expand-button"
+           , data_ "expanded" (pack $ if expanded then "true" else "false")
+           , dataPathAttr
+           ]
+           (toHtml $ if expanded then "+" else "-" :: String)
+       a_ [href_ ("/" <> pack name <> "?selected=" <> pathStr), class_ "tree-link", style_ (pack $ linkStyle), data_ "selected" pathStr] $ renderHtml obj
 
 renderClosureHtml :: ClosureDetails -> Html ()
 renderClosureHtml (ClosureDetails closure' _excSize info') = div_ [class_ "closure-row"] $ do
@@ -878,7 +854,7 @@ ccFormat Debug.CCPayload{..} = List.intercalate "\n" $
 
 parsePath :: String -> [Int]
 parsePath [] = []
-parsePath s = map read $ splitOn "." s
+parsePath s = map read $ splitOn "-" s
 
 parseProfileLevel :: String -> ProfileLevel
 parseProfileLevel "1" = OneLevel
@@ -893,7 +869,7 @@ truncT :: Text -> Text
 truncT = pack . trunc . T.unpack
 
 encodePath :: [Int] -> Text
-encodePath = pack . List.intercalate "." . map show
+encodePath = pack . List.intercalate "-" . map show
 
 togglePath :: Eq a => [a] -> [[a]] -> [[a]]
 togglePath x xs = if x `elem` xs then filter (/=x) xs else x:xs
@@ -932,6 +908,8 @@ eLogOutParam :: Data.String.IsString t => ParamGet t Bool
 eLogOutParam getParam = readParam "isJson" getParam (maybe False id . readMaybe) False
 filterChangedParam :: Data.String.IsString t => ParamGet t Bool
 filterChangedParam getParam = readParam "filterChanged" getParam (maybe False id . readMaybe) False
+fastModeParam :: Data.String.IsString t => ParamGet t Bool
+fastModeParam getParam = readParam "fastMode" getParam (maybe False id . readMaybe) False
 
 buildClosureGraph :: [String] -> [(String, String)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
@@ -1064,16 +1042,16 @@ toRGBA8 c =
   in JP.PixelRGBA8 (fromIntegral r) (fromIntegral g) (fromIntegral b) 255
 
 
-autoScrollScript :: HtmlT Data.Functor.Identity.Identity ()
-autoScrollScript = script_ $ mconcat
-                     [ "window.addEventListener('beforeunload', () => {"
-                     , "sessionStorage.setItem('scrollY', window.scrollY);"
-                     , "});"
-                     , "window.addEventListener('load', () => {"
-                     , "const scrollY = sessionStorage.getItem('scrollY');"
-                     , "if (scrollY !== null) window.scrollTo(0, parseInt(scrollY, 10));"
-                     , "});"
-                     ]
+genScript :: Text -> HtmlT Identity ()
+genScript loc = script_ [src_ loc, defer_ ""] (mempty :: Html ())
+expandToggleScript :: HtmlT Identity () 
+expandToggleScript = genScript "expandToggle.js"
+selectTreeLinkScript :: HtmlT Identity () 
+selectTreeLinkScript = genScript "selectTreeLink.js"
+setSearchLimitScript :: HtmlT Identity () 
+setSearchLimitScript = genScript "searchLimit.js"
+takeSnapshotScript :: HtmlT Identity () 
+takeSnapshotScript = genScript "takeSnapshot.js"
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
@@ -1155,7 +1133,8 @@ closureName (LabelNode l) = T.unpack l
 closureName (CCSDetails clabel _ _) = T.unpack $ clabel
 closureName (CCDetails clabel _) = T.unpack $ clabel
 
-updateImg appStateRef (CDIO _ (Just ImgInfo{..})) = do
+updateImg :: IORef AppState -> CDIO -> Scotty.ActionM ()
+updateImg appStateRef (CDIO _ (Just ImgInfo{..}) _) = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
     Connected s d (PausedMode os) -> do
@@ -1166,17 +1145,43 @@ updateImg appStateRef (CDIO _ (Just ImgInfo{..})) = do
     _ -> return ()
 updateImg _ _ = return ()
 
+getCDIO :: IOTree a name -> [Int] -> (a -> Maybe String) -> (a -> Int)
+        -> (IOTreeNode a name -> String) -> (a -> String) -> ActionT IO CDIO
 getCDIO tree selectedPath getName' getSize' nodeName format' = 
   case getSubTree tree selectedPath of
-    Nothing -> return $ CDIO Nothing Nothing
+    Nothing -> do
+      hasGV <- liftIO $ isGraphvizInstalled
+      return $ CDIO Nothing Nothing hasGV 
     Just subtree -> do
       (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName')
       let mInc = Just (getClosureIncSize getName' getSize' Set.empty expSubTree, capped)
       hasGV <- liftIO $ isGraphvizInstalled
-      if not hasGV then return $ CDIO mInc (Just $ ImgInfo { _hasGV = False })
+      if not hasGV then return $ CDIO mInc Nothing hasGV
       else do
         imgInfo <- handleImg expSubTree capped nodeName getName' format'
-        return $ CDIO mInc imgInfo
+        return $ CDIO mInc imgInfo hasGV
+
+imgName :: CDIO -> String
+imgName (CDIO _ (Just ImgInfo{..}) _) = _name
+imgName _ = ""
+
+graphvizProcess :: Data.GraphViz.Types.PrintDotRepr dg n =>
+                         GraphvizCommand -> [Char] -> dg n -> IO ()
+graphvizProcess comm outPath dotGraph = do
+  let cmd = case comm of
+              Dot ->  "dot"
+              _ -> "sfdp"
+      args = ["-Tsvg", "-o", outPath]
+  let processSpec = (proc cmd args)
+        { std_in = CreatePipe
+        , std_err = NoStream
+        }
+  withCreateProcess processSpec $ \(Just hIn) _ _ ph -> do
+    hSetBuffering hIn LineBuffering
+    hPutStrLn hIn (TL.unpack $ printDotGraph dotGraph)
+    hClose hIn
+    _ <- waitForProcess ph
+    return ()
 
 handleImg :: IOTreeNode a name -> Bool -> (IOTreeNode a name -> String) -> (a -> Maybe String) -> (a -> String) -> Scotty.ActionM (Maybe ImgInfo)
 handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
@@ -1187,12 +1192,15 @@ handleImg expSubtree@(IOTreeNode n' _) capped nodeName getName'' format' = do
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
       let graph = buildClosureGraph vizNodes fNodes vizEdges
-      let svgContent = liftIO $ do 
-                         createDirectoryIfMissing True "tmp"
-                         _ <- runGraphviz graph Svg svgPath
-                         svg' <- liftIO $ BS.readFile svgPath
-                         return (TLE.decodeUtf8 svg')
-      return $ Just $ ImgInfo name capped svgContent True
+      let tweakGraph :: GraphvizCommand -> DotGraph Int -> DotGraph Int
+          tweakGraph Dot g = g
+          tweakGraph _ g = g { graphStatements = (graphStatements g) <> stmts }
+            where stmts = [ GA $ GraphAttrs [Overlap (PrismOverlap Nothing)] ] 
+      let svgContent comm = liftIO $ do 
+                              createDirectoryIfMissing True "tmp"
+                              _ <- graphvizProcess comm svgPath (tweakGraph comm graph)
+                              return ()
+      return $ Just $ ImgInfo name capped svgContent
     Nothing -> return Nothing
 
 closureGetName :: ClosureDetails -> Maybe String
@@ -1276,7 +1284,7 @@ reconnect appStateRef = do
       liftIO $ writeIORef appStateRef newAppState
     _ -> return ()
 
-handleFilter :: MonadIO m => IORef AppState -> m ()
+handleFilter :: IORef AppState -> Scotty.ActionM ()
 handleFilter appStateRef = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
@@ -1290,6 +1298,29 @@ handleFilter appStateRef = do
       let newTM = Retainer tree suggs
           newAppState = updateAppState os (setTM newTM) socket debuggee' state
       liftIO $ writeIORef appStateRef newAppState
+    _ -> Scotty.redirect "/"
+
+handleToggle :: IOTree a name -> [Int] -> [Int] -> ([Int] -> Bool -> Bool -> a -> Html ())
+             -> Scotty.ActionM ()
+handleToggle newTree toggleIx selectedPath renderRow = do
+  let mNode = getSubTree newTree toggleIx
+  case mNode of
+    Just (IOTreeNode _ (Right children)) -> do
+      let htmlChildren = renderTreeNodesHtml renderRow selectedPath toggleIx children encodePath
+          htmlResponse = renderText $ div_ htmlChildren
+      Scotty.html htmlResponse    
+    _ -> Scotty.html mempty
+
+handlePartial :: (Ord name, Show name)
+              => IORef AppState -> IOTree a name -> [Int] -> ActionT IO CDIO
+              -> (a -> [Int] -> CDIO -> Html ()) -> ActionT IO ()
+handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
+  cdio <- getCDIO'
+  updateImg appStateRef cdio
+  let summaryHtml = renderText $ detailedSummary renderSummary tree selectedPath cdio
+  let imgName' = imgName cdio
+  let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'
+  Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
@@ -1299,13 +1330,42 @@ app appStateRef = do
     Scotty.file svgPath
   {- Generates the graph on demand -}
   Scotty.get "/graph" $ do
+    -- these headers are required to prevent the browser from auto-caching stale images
+    Scotty.addHeader "Cache-Control" "no-store, no-cache, must-revalidate, max-age=0"
+    Scotty.addHeader "Pragma" "no-cache"
+    Scotty.addHeader "Expires" "0"
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected _ _ (PausedMode os) -> do
-        _ <- liftIO $ _genSvg os
-        return ()
-    Scotty.setHeader "Content-Type" "image/svg+xml"
-    Scotty.file svgPath
+        -- retrieve currently running task (if any) and set it to Nothing
+        mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
+          (st {currentTask = Nothing}, currentTask st)
+        liftIO $ case mOldTask of
+          Just oldTask -> do
+            done <- poll oldTask
+            case done of 
+              Nothing -> cancel oldTask -- if the old task is still running, cancel it
+              Just _ -> return ()
+          Nothing -> return ()
+        -- set the async graph gen in the IO, then wait for it to finish
+        fastMode <- fastModeParam Scotty.queryParam
+        newTask <- liftIO $ async $ _genSvg os (if fastMode then Sfdp else Dot) 
+        liftIO $ atomicModifyIORef' appStateRef $ \st -> (st {currentTask = Just newTask}, ())
+        result <- liftIO $ E.try (wait newTask) :: Scotty.ActionM (Either E.SomeException ())
+        case result of
+          Right _ -> do -- serve the file on successful completion
+            Scotty.setHeader "Content-Type" "image/svg+xml"
+            Scotty.file svgPath
+          Left e -> do
+            case E.fromException e of
+              Just AsyncCancelled -> do -- error can be ignored, new graph is already loading
+                Scotty.status status409
+                Scotty.text "cancelled"
+              _ -> do -- an actual error, display "Failed to load graph"
+                Scotty.status status500
+                liftIO $ putStrLn $ "Render task failed: " ++ show e
+                Scotty.text "failed"
+      _ -> Scotty.redirect "/"
   {- Serves the profile dump file -}
   Scotty.get "/download-profile" $ do
     let filePath = "profile_dump"
@@ -1377,6 +1437,29 @@ app appStateRef = do
 
           
       Nothing -> Scotty.text "No file uploaded"
+  {- For fetching info so JS can update the page -}
+  Scotty.get "/partial" $ do
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    case state ^. majorState of
+      Connected _ _ (PausedMode os) ->
+        case _treeMode os of
+          SavedAndGCRoots -> do
+            let tree = _treeSavedAndGCRoots os
+            let getCDIO' = getCDIO tree selectedPath (Just . closureName)
+                           closureGetSize getNodeName closureFormat
+            handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
+          Retainer tree _ -> do
+            let getCDIO' = getCDIO tree selectedPath (Just . closureName)
+                           closureGetSize getNodeName closureFormat
+            handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
+
+          SearchedHtml Utils{..} tree _ -> do
+            let nameFn = maybe "" id . _getName 
+            let getCDIO' = getCDIO tree selectedPath _getName _getSize 
+                           (\(IOTreeNode n' _) -> nameFn n') _graphFormat
+            handlePartial appStateRef tree selectedPath getCDIO' _renderSummary
+      _ -> Scotty.redirect "/"
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
@@ -1389,7 +1472,7 @@ app appStateRef = do
             cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize getNodeName closureFormat
             updateImg appStateRef cdio
             Scotty.html $ renderConnectedPage selectedPath cdio socket debuggee' mode'
-          _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing undefined) socket debuggee' mode'
+          _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing Nothing False) socket debuggee' mode'
       _ -> Scotty.redirect "/"
   {- Here debuggees can be paused and resumed. When paused, information about closures can be displayed -}
   Scotty.post "/connect" $ do
@@ -1431,7 +1514,7 @@ app appStateRef = do
                               (Just 100)
                               []
                               ver 
-                              (return "")
+                              (const $ return ())
             newAppState = state & majorState . mode .~ pausedState
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/connect"     
@@ -1457,11 +1540,9 @@ app appStateRef = do
         Scotty.redirect "/"
       _ -> Scotty.redirect "/"
   {- Toggles the expansion state of a path in the tree -}
-  Scotty.post "/toggle" $ do
-    toggleIx <- togglePathParam Scotty.formParam
-    selectedPath <- selectedParam Scotty.formParam
-    let newSelected = toggleSelected selectedPath toggleIx
-    let selectedStr = encodePath newSelected
+  Scotty.get "/toggle" $ do
+    toggleIx <- togglePathParam Scotty.queryParam
+    selectedPath <- selectedParam Scotty.queryParam
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
       Connected socket debuggee' (PausedMode os) -> do
@@ -1471,17 +1552,17 @@ app appStateRef = do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
             let newAppState = state & majorState . mode . pausedMode . treeSavedAndGCRoots .~ newTree
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect $ "/connect?selected=" <> TL.fromStrict selectedStr
+            handleToggle newTree toggleIx selectedPath (detailedRowHtml renderClosureHtml "connect") 
           Retainer tree suggs -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
             let newAppState = updateAppState os (setTM $ Retainer newTree suggs) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect $ "/searchWithFilters?selected=" <> TL.fromStrict selectedStr
+            handleToggle newTree toggleIx selectedPath (detailedRowHtml renderClosureHtml "searchWithFilters") 
           SearchedHtml f tree name -> do
             newTree <- liftIO $ toggleTreeByPath tree toggleIx
             let newAppState = updateAppState os (setTM $ SearchedHtml f newTree name) socket debuggee' state
             liftIO $ writeIORef appStateRef newAppState
-            Scotty.redirect $ "/" <> TL.pack name <> "?selected=" <> TL.fromStrict selectedStr
+            handleToggle newTree toggleIx selectedPath (detailedRowHtml (_renderRow f) name) 
       _ -> Scotty.redirect "/"
   {- View profile (level 1 and 2) -}
   genericGet appStateRef "/profile" renderProfilePage
@@ -1624,14 +1705,13 @@ app appStateRef = do
         Scotty.redirect "/thunkAnalysis"
       _ -> Scotty.redirect "/" 
   {- Take snapshot -}
-  Scotty.post "/takeSnapshot" $ do
+  Scotty.get "/takeSnapshot" $ do
     state <- liftIO $ readIORef appStateRef
-    selectedPath <- selectedParam Scotty.formParam
-    filename <- Scotty.formParam "filename"
+    filename <- Scotty.queryParam "filename"
     case state ^. majorState of
       Connected _ debuggee' _ -> do
         liftIO $ snapshot debuggee' filename
-        Scotty.redirect ("/connect?selected=" <> TL.fromStrict (encodePath selectedPath))
+        Scotty.text $ "Saved snapshot named: " <> TL.pack filename 
       Setup{} -> Scotty.redirect "/" 
   {- Search with filters -}
   genericGet appStateRef "/searchWithFilters" undefined
@@ -1674,7 +1754,7 @@ app appStateRef = do
         let newFilters = case index of
                            n | n < 0 -> _filters os 
                            _ -> let (as, bs) = Prelude.splitAt index (_filters os) 
-                                in as ++ (tail bs)
+                                in as ++ (drop 1 bs)
             newAppState = updateAppState os (setFilters newFilters) socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
         handleFilter appStateRef
@@ -1691,9 +1771,9 @@ app appStateRef = do
         Scotty.redirect "/searchWithFilters?filterChanged=True"
       _ -> Scotty.redirect "/"
   {- Set the amount of results from filter searches etc. Input <= 0 -> no limit -}
-  Scotty.post "/setSearchLimit" $ do
+  Scotty.get "/setSearchLimit" $ do
     state <- liftIO $ readIORef appStateRef
-    limit <- searchLimitParam Scotty.formParam
+    limit <- searchLimitParam Scotty.queryParam
     case state ^. majorState of 
       Connected socket debuggee' (PausedMode os) -> do
         let newResultSize = case limit of
@@ -1703,7 +1783,10 @@ app appStateRef = do
         let setLimit os' = os' { _resultSize = newResultSize }
             newAppState = updateAppState os setLimit socket debuggee' state
         liftIO $ writeIORef appStateRef newAppState
-        Scotty.redirect "/connect"
+        Scotty.text $ "Updated limit to: " <> case newResultSize of 
+                                                Nothing -> "unlimited"
+                                                Just n -> TL.pack $ show n
+        --Scotty.redirect "/connect"
       _ -> Scotty.redirect "/" 
 
   where mkSavedAndGCRootsIOTree debuggee' = do
@@ -1719,4 +1802,6 @@ main :: IO ()
 main = do
   let initial = initialAppState
   appStateRef <- newIORef initial
-  Scotty.scotty 3000 (app appStateRef)
+  Scotty.scotty 3000 $ do
+    Scotty.middleware $ NWMS.staticPolicy (NWMS.addBase "src/js")
+    app appStateRef
