@@ -525,7 +525,7 @@ renderImgPage name capped = do
     button_ [ id_ "toggleButton", onclick_ "toggleDiv()" ] "Show"
     label_ [for_ "fastModeCheckbox"] " Fast mode: "
     input_ [type_ "checkbox", id_ "fastModeCheckbox", onchange_ "fastModeToggle()"]
-  if capped then p_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
+  p_ [id_ "capWarning"] (if capped then "Note: this is a very large object, and this graph is incomplete" else "")
   div_ [ id_ "toggleDiv", style_ "display: none;" ] $ do 
     body_ $ do
       div_ $ a_ [ href_ "/graph.svg"
@@ -1164,6 +1164,9 @@ getCDIO tree selectedPath getName' getSize' nodeName format' =
 imgName :: CDIO -> String
 imgName (CDIO _ (Just ImgInfo{..}) _) = _name
 imgName _ = ""
+imgCap :: CDIO -> Bool
+imgCap (CDIO _ (Just ImgInfo{..}) _) = _capped
+imgCap _ = False
 
 graphvizProcess :: Data.GraphViz.Types.PrintDotRepr dg n =>
                          GraphvizCommand -> [Char] -> dg n -> IO ()
@@ -1320,7 +1323,8 @@ handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
   let summaryHtml = renderText $ detailedSummary renderSummary tree selectedPath cdio
   let imgName' = imgName cdio
   let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'
-  Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle]
+  let capWarning = if imgCap cdio then "Note: this is a very large object, and this graph is incomplete" else "" :: String
+  Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle, "capWarning" .= capWarning]
 
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
