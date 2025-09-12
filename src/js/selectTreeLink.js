@@ -152,7 +152,19 @@ function updateSelection(pathStr) {
 }
 
 function forceExpandPath(path) {
-  console.log(path);
+  const url = new URL(window.location.href);
+  let selected = url.searchParams.get('selected');
+  if (!selected) {
+    selected = "0" 
+  }
+  fetch(`/forceExpand?selected=${selected}&force=${path}`)
+    .then(x => { 
+      svgLoaded = false;
+      fetchAndRender();
+    })
+    .catch(err => {
+      console.error("An error occurred:", err);
+    });
 }
 
 

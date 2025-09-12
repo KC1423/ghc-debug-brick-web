@@ -22,6 +22,7 @@ module IOTree
 import Lucid
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import Debug.Trace
 
 -- A tree style list where items can be expanded and collapsed
 data IOTree node name = IOTree
@@ -144,7 +145,7 @@ toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
                rest' <- toggleNodeByPath rest (i-1 : is)
                return $ n : rest'
  
-expandNodeSafe :: IOTreeNode node name -> (node -> String) -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
+expandNodeSafe :: IOTreeNode node name -> (node -> String) -> [[Int]] -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
 expandNodeSafe = expandNodeWithCap 100 []
 
 {-
@@ -175,20 +176,41 @@ expandNodeWithCap cap n' format = do
           return (c':cs', seen'')
 -}
 
-expandNodeWithCap :: Int -> [Int] -> IOTreeNode node name -> (node -> String) -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
-expandNodeWithCap cap root n' format = do
+expandNodeWithCap :: Int -> [Int] -> IOTreeNode node name -> (node -> String) -> [[Int]] -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
+expandNodeWithCap cap root n' format forced = do
+  --print $ "NEW TRAVERSAL " ++ "forced = " ++ show forced 
   (node, nodes) <- go Set.empty n' root 0
   return (node, Set.size nodes >= cap)
   where 
     go seen n@(IOTreeNode node csE) pathSoFar minorIx = do
       let ptr = format node
           thisPath = pathSoFar ++ [minorIx]
+      --print $ "visiting node " ++ show thisPath
       if Set.member ptr seen
         then return (IOTreeNode (node, thisPath, False) (Right []), seen)
         else do
+          --print "not seen before"
           let seen'' = Set.insert ptr seen
           if Set.size seen'' >= cap
-            then return (IOTreeNode (node, thisPath, False) (wrapChildren csE), seen'')
+            then do 
+              --print "oops cap reached, checking if we can add anyway"
+              cs <- case csE of
+                      Left getChildren -> getChildren
+                      Right cs' -> return cs' 
+              if thisPath `elem` forced || and (map (\(IOTreeNode x _) -> Set.member (format x) seen'') cs) then do
+                 --print $ show thisPath ++ " forced or already fully visited" ++ (if thisPath `elem` forced then " (forced)" else " (not forced)")
+                 (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
+                 return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')
+              {-if thisPath `elem` forced then do
+                case csE of
+                  Left getChildren -> do
+                    cs <- getChildren
+                    (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
+                    return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')
+                  Right cs -> do
+                    (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
+                    return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')-}
+              else return (IOTreeNode (node, thisPath, False) (wrapChildren csE), seen'')
             else case csE of
               Left getChildren -> do
                 cs <- getChildren
@@ -199,7 +221,17 @@ expandNodeWithCap cap root n' format = do
                 return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')
     processChildren seen _ _ [] = return ([], seen, True)
     processChildren seen thisPath minorIx (c:cs)
-      | cap == Set.size seen = return ([], seen, False)
+      | cap <= Set.size seen =
+          if thisPath `elem` forced 
+            then do
+              (c', seen') <- go seen c thisPath minorIx
+              (cs', seen'', expanded) <- processChildren seen' thisPath (minorIx + 1) cs
+              return (c':cs', seen'', expanded)
+            else if and (map (\(IOTreeNode x _) -> Set.member (format x) seen) (c:cs)) then do
+                (c', seen') <- go seen c thisPath minorIx
+                (cs', seen'', expanded) <- processChildren seen' thisPath (minorIx + 1) cs
+                return (c':cs', seen'', expanded)
+              else return ([], seen, False)
       | otherwise = do
           (c', seen') <- go seen c thisPath minorIx
           (cs', seen'', expanded) <- processChildren seen' thisPath (minorIx + 1) cs

@@ -910,6 +910,9 @@ filterChangedParam :: Data.String.IsString t => ParamGet t Bool
 filterChangedParam getParam = readParam "filterChanged" getParam (maybe False id . readMaybe) False
 fastModeParam :: Data.String.IsString t => ParamGet t Bool
 fastModeParam getParam = readParam "fastMode" getParam (maybe False id . readMaybe) False
+forceParam :: Data.String.IsString t => ParamGet t [Int]
+forceParam getParam = readParam "force" getParam parsePath [0]
+
 
 buildClosureGraph :: [String] -> [(String, NodeInfo)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
@@ -918,9 +921,9 @@ buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
   --node sid [toLabel (pack sn :: Text), Data.GraphViz.style filled, fillColor Yellow, color Red]
   mapM_ (\(n, nid) -> 
             let NodeInfo fNode path expanded = maybe (NodeInfo "" [] False) id (lookup n fnodes)
-            in node nid $ [toLabel (pack fNode :: Text)
-                          , URL (TL.pack $ "http://localhost:3000/forceExpand?path="
-                                 ++ T.unpack (encodePath path))]
+            in node nid $ ([ toLabel (pack fNode :: Text) ]
+                          ++ 
+                          if not expanded then [URL (TL.pack $ "http://localhost:3000/forceExpand?path=" ++ T.unpack (encodePath path))] else [])
                           ++ if path == [0] then [Data.GraphViz.style filled, if expanded then fillColor Yellow else fillColor GreenYellow, color Red] else if not expanded then [Data.GraphViz.style filled, fillColor Green] else []) nids
   mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
                       (Just x, Just y) -> edge x y [toLabel (pack (show eid) :: Text)]
@@ -1075,12 +1078,12 @@ genericGet appStateRef index renderPage = do
             case _treeMode os of 
                SavedAndGCRoots{} -> Scotty.redirect "/connect"
                Retainer tree' suggs -> do
-                 cdio <- getCDIO tree' selectedPath (Just . closureName) closureGetSize closureFormat
-                 updateImg appStateRef cdio
+                 cdio <- getCDIO tree' selectedPath (Just . closureName) closureGetSize closureFormat []
+                 updateImg appStateRef cdio []
                  Scotty.html $ renderFilterSearchPage tree' suggs (_filters os) (_version os) selectedPath cdio
                SearchedHtml u@(Utils{..}) tree name -> do
-                 cdio <- getCDIO tree selectedPath _getName _getSize _graphFormat
-                 updateImg appStateRef cdio
+                 cdio <- getCDIO tree selectedPath _getName _getSize _graphFormat []
+                 updateImg appStateRef cdio []
                  Scotty.html $ renderPage u tree name selectedPath cdio
           RunningMode -> Scotty.redirect "/connect"
       Setup{} -> Scotty.redirect "/"
@@ -1132,27 +1135,26 @@ closureName (LabelNode l) = T.unpack l
 closureName (CCSDetails clabel _ _) = T.unpack $ clabel
 closureName (CCDetails clabel _) = T.unpack $ clabel
 
-updateImg :: IORef AppState -> CDIO -> Scotty.ActionM ()
-updateImg appStateRef (CDIO _ (Just ImgInfo{..}) _) = do
+updateImg :: IORef AppState -> CDIO -> [[Int]] -> Scotty.ActionM ()
+updateImg appStateRef (CDIO _ (Just ImgInfo{..}) _) forced = do
   state <- liftIO $ readIORef appStateRef
   case state ^. majorState of
     Connected s d (PausedMode os) -> do
-      let newOs = os { _genSvg = _svgContent }
+      let newOs = os { _genSvg = _svgContent, _forceExpand = forced }
       let newState = state { _majorState = Connected s d (PausedMode newOs) } 
       liftIO $ writeIORef appStateRef newState
       return ()
-    _ -> return ()
-updateImg _ _ = return ()
+updateImg _ _ _ = return ()
 
 --getCDIO :: forall a . IOTree a Name -> [Int] -> (a -> Maybe String) -> (a -> Int)
 --        -> (IOTreeNode a Name -> String) -> (a -> String) -> ActionT IO CDIO
-getCDIO tree selectedPath getName' getSize' format' = 
+getCDIO tree selectedPath getName' getSize' format' forced = 
   case getSubTree tree selectedPath of
     Nothing -> do
       hasGV <- liftIO $ isGraphvizInstalled
       return $ CDIO Nothing Nothing hasGV
     Just subtree -> do
-      (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName')
+      (expSubTree, capped) <- liftIO $ expandNodeSafe subtree (maybe "" id . getName') forced
       let mInc = Just (getClosureIncSize getName' getSize' Set.empty expSubTree, capped)
       hasGV <- liftIO $ isGraphvizInstalled
       if not hasGV then return $ CDIO mInc Nothing hasGV
@@ -1315,7 +1317,7 @@ handlePartial :: (Ord name, Show name)
               -> (a -> [Int] -> CDIO -> Html ()) -> ActionT IO ()
 handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
   cdio <- getCDIO'
-  updateImg appStateRef cdio
+  updateImg appStateRef cdio []
   let summaryHtml = renderText $ detailedSummary renderSummary tree selectedPath cdio
   let imgName' = imgName cdio
   let imgTitle = "Visualisation" ++ if null imgName' then "" else " of " ++ imgName'
@@ -1446,22 +1448,36 @@ app appStateRef = do
           SavedAndGCRoots -> do
             let tree = _treeSavedAndGCRoots os
             let getCDIO' = getCDIO tree selectedPath (Just . closureName)
-                           closureGetSize closureFormat
+                           closureGetSize closureFormat []
             handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
           Retainer tree _ -> do
             let getCDIO' = getCDIO tree selectedPath (Just . closureName)
-                           closureGetSize closureFormat
+                           closureGetSize closureFormat []
             handlePartial appStateRef tree selectedPath getCDIO' renderClosureSummary
 
           SearchedHtml Utils{..} tree _ -> do
-            let getCDIO' = getCDIO tree selectedPath _getName _getSize _graphFormat
+            let getCDIO' = getCDIO tree selectedPath _getName _getSize _graphFormat []
             handlePartial appStateRef tree selectedPath getCDIO' _renderSummary
       _ -> Scotty.redirect "/"
   {- For fetching additional info for graphs -}
   Scotty.get "/forceExpand" $ do
-    --state <- liftIO $ readIORef appStateRef
-    --selectedPath <- selectedParam.Scotty.queryParam
-    liftIO $ print "force expand - scotty"
+    state <- liftIO $ readIORef appStateRef
+    selectedPath <- selectedParam Scotty.queryParam
+    forcePath <- forceParam Scotty.queryParam
+    case state ^. majorState of
+      Connected _ _ (PausedMode os) -> do
+        let forced = forcePath : _forceExpand os
+        case _treeMode os of
+          SavedAndGCRoots -> do
+            let tree = _treeSavedAndGCRoots os
+            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize closureFormat forced
+            updateImg appStateRef cdio forced      
+          Retainer tree _ -> do
+            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize closureFormat forced
+            updateImg appStateRef cdio forced      
+          SearchedHtml Utils{..} tree _ -> do
+            cdio <- getCDIO tree selectedPath _getName _getSize _graphFormat forced
+            updateImg appStateRef cdio forced      
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
@@ -1471,8 +1487,8 @@ app appStateRef = do
         case mode' of 
           PausedMode os -> do
             let tree = _treeSavedAndGCRoots os
-            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize closureFormat
-            updateImg appStateRef cdio
+            cdio <- getCDIO tree selectedPath (Just . closureName) closureGetSize closureFormat []
+            updateImg appStateRef cdio []
             Scotty.html $ renderConnectedPage selectedPath cdio socket debuggee' mode'
           _ -> Scotty.html $ renderConnectedPage selectedPath (CDIO Nothing Nothing False) socket debuggee' mode'
       _ -> Scotty.redirect "/"
@@ -1517,6 +1533,7 @@ app appStateRef = do
                               []
                               ver 
                               (const $ return ())
+                              [[]]
             newAppState = state & majorState . mode .~ pausedState
         liftIO $ writeIORef appStateRef newAppState
         Scotty.redirect "/connect"     
