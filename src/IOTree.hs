@@ -16,6 +16,7 @@ module IOTree
   , toggleTreeByPath
   , expandNodeWithCap
   , expandNodeSafe
+  , NodeInfo(..)
   ) where
 
 import Lucid
@@ -39,6 +40,13 @@ data IOTreeNode node name
         (IO [IOTreeNode node name])  -- Node is collapsed
         [IOTreeNode node name]       -- Node is expanded
     }
+
+data NodeInfo = NodeInfo
+  { formatted :: String
+  , path :: [Int]
+  , expanded :: Bool
+  }
+
 
 ioTree
   :: forall node name

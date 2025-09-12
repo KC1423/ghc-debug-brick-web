@@ -785,11 +785,6 @@ getClosureIncSize getName' getSize' seen' node' = fst (go seen' node')
       where step (acc, st) x = let (a, st') = f st x in (acc + a, st') 
 
 type EdgeList = [(String, String, Int)]
-data NodeInfo = NodeInfo
-  { formatted :: String
-  , path :: [Int]
-  , expanded :: Bool
-  }
 
 getClosureVizTree :: (a -> String) -> (a -> String) -> Set.Set String -> [(String, NodeInfo)] -> EdgeList -> IOTreeNode (a, [Int], Bool) name -> (Set.Set String, [(String, NodeInfo)], EdgeList)
 getClosureVizTree getName' format' nodes formattedNodes edges (IOTreeNode (n, path, expanded) csE) = 
@@ -924,7 +919,7 @@ buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
   mapM_ (\(n, nid) -> 
             let NodeInfo fNode path expanded = maybe (NodeInfo "" [] False) id (lookup n fnodes)
             in node nid $ [toLabel (pack fNode :: Text)
-                          , URL (TL.pack $ "https://localhost:3000/blah/"
+                          , URL (TL.pack $ "http://localhost:3000/forceExpand?path="
                                  ++ T.unpack (encodePath path))]
                           ++ if path == [0] then [Data.GraphViz.style filled, if expanded then fillColor Yellow else fillColor GreenYellow, color Red] else if not expanded then [Data.GraphViz.style filled, fillColor Green] else []) nids
   mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
@@ -1462,6 +1457,11 @@ app appStateRef = do
             let getCDIO' = getCDIO tree selectedPath _getName _getSize _graphFormat
             handlePartial appStateRef tree selectedPath getCDIO' _renderSummary
       _ -> Scotty.redirect "/"
+  {- For fetching additional info for graphs -}
+  Scotty.get "/forceExpand" $ do
+    --state <- liftIO $ readIORef appStateRef
+    --selectedPath <- selectedParam.Scotty.queryParam
+    liftIO $ print "force expand - scotty"
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
     state <- liftIO $ readIORef appStateRef
