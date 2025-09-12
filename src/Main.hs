@@ -525,6 +525,7 @@ renderImgPage name capped = do
     button_ [ id_ "toggleButton", onclick_ "toggleDiv()" ] "Show"
     label_ [for_ "fastModeCheckbox"] " Fast mode: "
     input_ [type_ "checkbox", id_ "fastModeCheckbox", onchange_ "fastModeToggle()"]
+    toolTipSpan $ toHtmlRaw ("Yellow = Root node<br>Green = click to see children<br>Light green = root node, click to see children" :: Text)
   if capped then p_ $ "Note: this is a very large object, and this tree is incomplete" else mempty
   div_ [ id_ "toggleDiv", style_ "display: none;" ] $ do 
     body_ $ do
