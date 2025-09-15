@@ -259,6 +259,16 @@ renderSocketSelectionPage st sockets =
           li_ $ do
             input_ [type_ "radio", name_ "isJson", value_ "True"]
             toHtml ("Create json" :: String)
+          
+          div_ [style_ "margin: 0; display: flex; align-items: center; gap: 8px;"] $ do
+            p_ "Sort by: "
+            select_ [ name_ "eventlog-sort" ] $ do
+              option_ [value_ "size"] (toHtml ("Size" :: Text))
+              option_ [value_ "stddev"] (toHtml ("Standard deviation" :: Text))
+              option_ [value_ "name"] (toHtml ("Name" :: Text))
+              option_ [value_ "number"] (toHtml ("Number" :: Text))
+              option_ [value_ "gradient"] (toHtml ("Gradient" :: Text))
+
 
 renderAlreadyConnectedPage :: TL.Text
 renderAlreadyConnectedPage = renderText $ do
@@ -885,7 +895,16 @@ fastModeParam :: Data.String.IsString t => ParamGet t Bool
 fastModeParam getParam = readParam "fastMode" getParam (maybe False id . readMaybe) False
 forceParam :: Data.String.IsString t => ParamGet t [Int]
 forceParam getParam = readParam "force" getParam parsePath [0]
+eLogSortParam :: Data.String.IsString t => ParamGet t EA.Sort
+eLogSortParam getParam = readParam "eventlog-sort" getParam parseSort EA.Size
 
+parseSort :: String -> EA.Sort
+parseSort "size" = EA.Size
+parseSort "stddev" = EA.StdDev
+parseSort "name" = EA.Name
+parseSort "number" = EA.Number
+parseSort "gradient" = EA.Gradient
+parseSort _ = error "invalid sort option"
 
 buildClosureGraph :: [String] -> [(String, NodeInfo)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
@@ -1380,6 +1399,7 @@ app appStateRef = do
   Scotty.post "/eventlogAnalysis" $ do
     file <- Scotty.files
     isJson <- eLogOutParam Scotty.formParam
+    sortOn <- eLogSortParam Scotty.formParam
     case lookup "eventlog" file of
       Just f -> do
         let path = "tmp/prog.eventlog"
@@ -1388,7 +1408,7 @@ app appStateRef = do
         liftIO $ BS.writeFile path (fileContent f)
         let checkTraces _ = return ()
             args = EA.Args 
-              { sorting = EA.Size
+              { sorting = sortOn
               , reversing = False
               , nBands = 15
               , detailedLimit = Nothing
