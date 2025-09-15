@@ -3,8 +3,8 @@ let svgLoaded = false;
 function fastModeToggle() {
   const graphDiv = document.getElementById('toggleDiv');
   const container = document.getElementById('svg-container');
+  svgLoaded = false;
   if (graphDiv && graphDiv.style.display !== 'none') {
-    svgLoaded = false;
     if (container) {
       container.innerHTML = '<p style="font-style: italic; color: #555;">Loading graph...</p>';
       document.getElementById('download-link').style.display = 'none';
@@ -155,18 +155,50 @@ function updateSelection(pathStr) {
   }
 }
 
-// Event delegation to handle all future <a> clicks
-document.addEventListener('click', function (event) {
-  const target = event.target.closest('a');
-  if (target && target.href && target.closest('.tree-row')) {
-    const url = new URL(target.href);
-    const selected = url.searchParams.get('selected');
-    if (selected) {
-      event.preventDefault();
-      history.pushState(null, '', `?selected=${encodeURIComponent(selected)}`);
-      updateSelection(selected);
-    }
+function forceExpandPath(path) {
+  const url = new URL(window.location.href);
+  let selected = url.searchParams.get('selected');
+  if (!selected) {
+    selected = "0" 
   }
+  fetch(`/forceExpand?selected=${selected}&force=${path}`)
+    .then(x => { 
+      svgLoaded = false;
+      fetchAndRender();
+    })
+    .catch(err => {
+      console.error("An error occurred:", err);
+    });
+}
+
+
+
+// Event delegation to handle all future <a> clicks
+document.addEventListener('DOMContentLoaded', function () {
+  document.addEventListener('click', function (event) {
+    const target = event.target.closest('a');
+    if (!target) return;
+    const rawHref = target.getAttribute('href') || target.getAttribute('xlink:href');
+    if (!rawHref) return;
+    const url = new URL(rawHref, window.location.origin);
+    if (target.closest('.tree-row')) {
+      const selected = url.searchParams.get('selected');
+      if (selected) {
+        event.preventDefault();
+        history.pushState(null, '', `?selected=${encodeURIComponent(selected)}`);
+        updateSelection(selected);
+        return;
+      }
+    }
+    if (url.pathname === '/forceExpand') {
+      const path = url.searchParams.get('path');
+      if (path) {
+        event.preventDefault();
+        forceExpandPath(path);
+        return;
+      }
+    }
+  });
 });
 
 // Restore toggle state on page load

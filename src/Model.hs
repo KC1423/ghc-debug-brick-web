@@ -194,6 +194,7 @@ data OperationalState = OperationalState
     , _filters :: [UIFilter]
     , _version :: GD.Version
     , _genSvg :: GraphvizCommand -> IO ()
+    , _forceExpand :: [[Int]] 
     }
 
 clearFilters :: OperationalState -> OperationalState
