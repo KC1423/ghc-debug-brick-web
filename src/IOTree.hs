@@ -146,7 +146,7 @@ toggleNodeByPath (n : rest) (i : is) = do
   return $ n : rest'
  
 expandNodeSafe :: IOTreeNode node name -> (node -> String) -> [[Int]] -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
-expandNodeSafe = expandNodeWithCap 5 []
+expandNodeSafe = expandNodeWithCap 100 []
 
 expandNodeWithCap :: Int -> [Int] -> IOTreeNode node name -> (node -> String) -> [[Int]] -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
 expandNodeWithCap cap root n' format forced = do
