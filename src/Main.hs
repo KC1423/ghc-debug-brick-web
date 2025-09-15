@@ -268,6 +268,8 @@ renderSocketSelectionPage st sockets =
               option_ [value_ "name"] (toHtml ("Name" :: Text))
               option_ [value_ "number"] (toHtml ("Number" :: Text))
               option_ [value_ "gradient"] (toHtml ("Gradient" :: Text))
+          label_ [for_ "elog-reverse"] " Reverse band order: "
+          input_ [type_ "checkbox", id_ "elog-reverse", name_ "eLogRev"]
 
 
 renderAlreadyConnectedPage :: TL.Text
@@ -897,6 +899,8 @@ forceParam :: Data.String.IsString t => ParamGet t [Int]
 forceParam getParam = readParam "force" getParam parsePath [0]
 eLogSortParam :: Data.String.IsString t => ParamGet t EA.Sort
 eLogSortParam getParam = readParam "eventlog-sort" getParam parseSort EA.Size
+eLogRevParam :: Data.String.IsString t => ParamGet t Bool
+eLogRevParam getParam = readParam "eLogRev" getParam (== "on") False
 
 parseSort :: String -> EA.Sort
 parseSort "size" = EA.Size
@@ -1400,6 +1404,7 @@ app appStateRef = do
     file <- Scotty.files
     isJson <- eLogOutParam Scotty.formParam
     sortOn <- eLogSortParam Scotty.formParam
+    rev <- eLogRevParam Scotty.formParam
     case lookup "eventlog" file of
       Just f -> do
         let path = "tmp/prog.eventlog"
@@ -1409,7 +1414,7 @@ app appStateRef = do
         let checkTraces _ = return ()
             args = EA.Args 
               { sorting = sortOn
-              , reversing = False
+              , reversing = rev
               , nBands = 15
               , detailedLimit = Nothing
               , heapProfile = isHeapProfile
