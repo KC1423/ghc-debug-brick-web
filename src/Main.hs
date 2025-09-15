@@ -637,28 +637,9 @@ genFilterButtons' suggs exclude flavourText filterType = do
     input_ [type_ "hidden", name_ "filterType", value_ (pack filterType)]
     button_ [type_ "submit", name_ "invert", value_ "False"] "Add filter"
     if exclude then button_ [type_ "submit", name_ "invert", value_ "True"] "Exclude" else mempty
-
     -- JS to toggle input visibility
-    script_ $ pack $
-      "function handleSelectChange(selectId, inputId) {\n\
-      \  var select = document.getElementById(selectId);\n\
-      \  var input = document.getElementById(inputId);\n\
-      \  if (select && input) {\n\
-      \    if (select.value === '__other__') {\n\
-      \      input.style.display = 'inline-block';\n\
-      \      input.required = true;\n\
-      \      select.name = '';\n\
-      \      input.name = 'pattern';\n\
-      \    } else {\n\
-      \      input.style.display = 'none';\n\
-      \      input.required = false;\n\
-      \      input.name = '';\n\
-      \      select.name = 'pattern';\n\
-      \    }\n\
-      \  }\n\
-      \}"
-
-        
+    otherTextInputScript
+            
 detailedRowHtml :: (a -> Html ()) -> String -> [Int] -> Bool -> Bool -> a -> Html ()
 detailedRowHtml renderHtml name thisPath expanded selected obj =
   let depth = length thisPath
@@ -1050,6 +1031,8 @@ setSearchLimitScript :: HtmlT Identity ()
 setSearchLimitScript = genScript "searchLimit.js"
 takeSnapshotScript :: HtmlT Identity () 
 takeSnapshotScript = genScript "takeSnapshot.js"
+otherTextInputScript :: HtmlT Identity () 
+otherTextInputScript = genScript "filterTextBox.js" 
 
 svgPath :: String
 svgPath = "tmp/graph.svg"
