@@ -22,7 +22,6 @@ module IOTree
 import Lucid
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Debug.Trace
 
 -- A tree style list where items can be expanded and collapsed
 data IOTree node name = IOTree
@@ -72,6 +71,12 @@ nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))
 
 
 {- New code / web stuff -}
+getChildrenE :: Either (IO [IOTreeNode node name]) [IOTreeNode node name] -> IO [IOTreeNode node name]
+getChildrenE csE = case csE of
+                     Left getChildren' -> getChildren'
+                     Right cs -> pure cs
+
+
 renderIOTreeHtml :: (Ord name, Show name) => IOTree node name 
                                           -> [Int]
                                           -> ([Int] -> Bool -> Bool -> node -> Html ())
@@ -111,11 +116,11 @@ getSubTree (IOTree _ roots _) path = findNodeByPath roots path
   where findNodeByPath :: [IOTreeNode node name] -> [Int] -> Maybe (IOTreeNode node name)
         findNodeByPath _ [] = Nothing
         findNodeByPath [] _ = Nothing
-        findNodeByPath (n@(IOTreeNode _ csE) : rest) (i:is) =  
-          if i == 0 then if null is then Just n else case csE of
-                                                       Left _ -> Nothing
-                                                       Right cs -> findNodeByPath cs is
-           else findNodeByPath rest (i-1 : is)
+        findNodeByPath (n : _) [0] = Just n
+        findNodeByPath (IOTreeNode _ csE : _) (0 : is) = case csE of
+          Left _ -> Nothing
+          Right cs -> findNodeByPath cs is
+        findNodeByPath (_ : rest) (i : is) = findNodeByPath rest (i-1 : is)
 
 
 toggleTreeByPath :: IOTree node name -> [Int] -> IO (IOTree node name)
@@ -126,119 +131,49 @@ toggleTreeByPath (IOTree a roots b) path = do
 toggleNodeByPath :: [IOTreeNode node name] -> [Int] -> IO [IOTreeNode node name]
 toggleNodeByPath [] _ = return []
 toggleNodeByPath _ [] = return []
-toggleNodeByPath (n@(IOTreeNode node' csE) : rest) (i:is) =
-  if i == 0 then if null is then case csE of
-                                   Left getChildren -> do
-                                     cs <- getChildren
-                                     return $ IOTreeNode node' (Right cs) : rest                
-                                   Right cs -> return $ IOTreeNode node' (Left $ return cs) : rest
-                                   --Right cs -> return $ IOTreeNode node' (Right cs) : rest
-                            else case csE of
-                                   Left getChildren -> do
-                                     csE' <- getChildren
-                                     ecsE' <- toggleNodeByPath csE' is
-                                     return $ IOTreeNode node' (Right ecsE') : rest
-                                   Right cs -> do
-                                     ecs <- toggleNodeByPath cs is
-                                     return $ IOTreeNode node' (Right ecs) : rest
-            else do
-               rest' <- toggleNodeByPath rest (i-1 : is)
-               return $ n : rest'
+toggleNodeByPath (IOTreeNode node' csE : rest) [0] =
+  case csE of
+    Left getChildren -> do
+      cs <- getChildren
+      return $ IOTreeNode node' (Right cs) : rest                
+    Right cs -> return $ IOTreeNode node' (Left $ return cs) : rest
+toggleNodeByPath (IOTreeNode node' csE : rest) (0 : is) = do
+  cs <- getChildrenE csE
+  ecs <- toggleNodeByPath cs is
+  return $ IOTreeNode node' (Right ecs) : rest
+toggleNodeByPath (n : rest) (i : is) = do
+  rest' <- toggleNodeByPath rest (i-1 : is)
+  return $ n : rest'
  
 expandNodeSafe :: IOTreeNode node name -> (node -> String) -> [[Int]] -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
-expandNodeSafe = expandNodeWithCap 100 []
-
-{-
-expandNodeWithCap :: Int -> IOTreeNode node name -> (node -> String) -> IO (IOTreeNode node name, Bool)
-expandNodeWithCap cap n' format = do
-  (node, nodes) <- go Set.empty n'
-  return (node, Set.size nodes == cap)
-  where 
-    go seen n@(IOTreeNode node csE)
-      | cap == Set.size seen = return (n, seen)
-      | otherwise = let ptr = format node
-                    in if Set.member ptr seen
-                       then return (n, seen) 
-                       else case csE of
-                         Left getChildren -> do
-                           cs <- getChildren
-                           (newCs', seen') <- processChildren (Set.insert ptr seen) cs
-                           return (IOTreeNode node (Right newCs'), seen')
-                         Right cs -> do
-                           (newCs', seen') <- processChildren (Set.insert ptr seen) cs
-                           return (IOTreeNode node (Right newCs'), seen')
-    processChildren seen [] = return ([], seen)
-    processChildren seen (c:cs)
-      | cap == Set.size seen = return ([], seen)
-      | otherwise = do
-          (c', seen') <- go seen c
-          (cs', seen'') <- processChildren seen' cs
-          return (c':cs', seen'')
--}
+expandNodeSafe = expandNodeWithCap 5 []
 
 expandNodeWithCap :: Int -> [Int] -> IOTreeNode node name -> (node -> String) -> [[Int]] -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
 expandNodeWithCap cap root n' format forced = do
-  --print $ "NEW TRAVERSAL " ++ "forced = " ++ show forced 
   (node, nodes) <- go Set.empty n' root 0
   return (node, Set.size nodes >= cap)
   where 
-    go seen n@(IOTreeNode node csE) pathSoFar minorIx = do
+    go seen (IOTreeNode node csE) pathSoFar minorIx = do
       let ptr = format node
           thisPath = pathSoFar ++ [minorIx]
-      --print $ "visiting node " ++ show thisPath
-      if Set.member ptr seen
-        then return (IOTreeNode (node, thisPath, False) (Right []), seen)
-        else do
-          --print "not seen before"
-          let seen'' = Set.insert ptr seen
-          if Set.size seen'' >= cap
-            then do 
-              --print "oops cap reached, checking if we can add anyway"
-              cs <- case csE of
-                      Left getChildren -> getChildren
-                      Right cs' -> return cs' 
-              if thisPath `elem` forced || and (map (\(IOTreeNode x _) -> Set.member (format x) seen'') cs) then do
-                 --print $ show thisPath ++ " forced or already fully visited" ++ (if thisPath `elem` forced then " (forced)" else " (not forced)")
-                 (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
-                 return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')
-              {-if thisPath `elem` forced then do
-                case csE of
-                  Left getChildren -> do
-                    cs <- getChildren
-                    (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
-                    return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')
-                  Right cs -> do
-                    (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
-                    return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')-}
-              else return (IOTreeNode (node, thisPath, False) (wrapChildren csE), seen'')
-            else case csE of
-              Left getChildren -> do
-                cs <- getChildren
-                (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
-                return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')
-              Right cs -> do
-                (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
-                return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')
+      if Set.member ptr seen then return (IOTreeNode (node, thisPath, False) (Right []), seen)
+      else do
+        let seen'' = Set.insert ptr seen
+        cs <- getChildrenE csE
+        if canExpand thisPath seen'' cs then do
+          (newCs', seen', expanded) <- processChildren seen'' thisPath 0 cs
+          return (IOTreeNode (node, thisPath, expanded) (Right newCs'), seen')
+        else return (IOTreeNode (node, thisPath, False) (wrapChildren csE), seen'')
     processChildren seen _ _ [] = return ([], seen, True)
     processChildren seen thisPath minorIx (c:cs)
-      | cap <= Set.size seen =
-          if thisPath `elem` forced 
-            then do
-              (c', seen') <- go seen c thisPath minorIx
-              (cs', seen'', expanded) <- processChildren seen' thisPath (minorIx + 1) cs
-              return (c':cs', seen'', expanded)
-            else if and (map (\(IOTreeNode x _) -> Set.member (format x) seen) (c:cs)) then do
-                (c', seen') <- go seen c thisPath minorIx
-                (cs', seen'', expanded) <- processChildren seen' thisPath (minorIx + 1) cs
-                return (c':cs', seen'', expanded)
-              else return ([], seen, False)
-      | otherwise = do
+      | canExpand thisPath seen (c:cs) = do
           (c', seen') <- go seen c thisPath minorIx
           (cs', seen'', expanded) <- processChildren seen' thisPath (minorIx + 1) cs
           return (c':cs', seen'', expanded)
-    wrapChildren (Left getChildren) = Left $ do
-      cs <- getChildren
+      | otherwise = return ([], seen, False)
+    allChildrenSeen seen' cs = and (map (\(IOTreeNode x _) -> Set.member (format x) seen') cs)
+    canExpand path seen' cs = Set.size seen' < cap || path `elem` forced || allChildrenSeen seen' cs
+    wrapChildren csE = Left $ do
+      cs <- getChildrenE csE
       return $ fmap (\c -> IOTreeNode (getNode c, [], False) (Left (return []))) cs
-    wrapChildren (Right cs) = Left $ return $
-      fmap (\c -> IOTreeNode (getNode c, [], False) (Left (return []))) cs
     getNode (IOTreeNode n _) = n
