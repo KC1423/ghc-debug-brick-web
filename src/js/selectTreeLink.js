@@ -104,6 +104,10 @@ function updateSummaries(pathStr) {
       if (imgTitle) {
         imgTitle.innerHTML = data.imgName;
       }
+      let capWarning = document.getElementById('capWarning');
+      if (capWarning) {
+        capWarning.innerHTML = data.capWarning;
+      }
       applyToggleState();
     });
 }
