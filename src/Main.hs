@@ -25,7 +25,7 @@ import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
 import Data.GraphViz (GraphvizCommand(..), toLabel, isGraphvizInstalled, style, filled, color, X11Color(Yellow, Red, Green, GreenYellow), fillColor) 
-import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL), Overlap(PrismOverlap))
+import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL, Shape, Label, TailPort), Overlap(PrismOverlap), Shape(Record), Label(StrLabel), PortName(..), PortPos(..))
 import Data.GraphViz.Types
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, DotStatement(GA))
@@ -52,6 +52,7 @@ import Control.Concurrent.Async
 import Network.HTTP.Types (status409, status500)
 import System.Process
 import System.IO
+import Debug.Trace
 
 import Control.Applicative
 import Control.Monad (forM)
@@ -777,14 +778,14 @@ getClosureVizTree getName' format' nodes formattedNodes edges (IOTreeNode (n, pa
   in if Set.member ptr nodes
      then (nodes, formattedNodes, [])
      else case csE of
-            Left _ -> (Set.insert ptr nodes, (ptr, (NodeInfo (format' n) path False)) : formattedNodes, [])
+            Left _ -> (Set.insert ptr nodes, (ptr, (NodeInfo (format' n) path False [])) : formattedNodes, [])
             Right cs -> 
               let nodes'' = Set.insert ptr nodes
-                  fnodes'' = (ptr, NodeInfo (format' n) path expanded) : formattedNodes
                   (nodesFinal, fNodesFinal, childEdges) = listApply (getClosureVizTree getName' format') (nodes'', fnodes'', edges) cs
                   children = [ getName' n'
                              | IOTreeNode (n', _, _) _ <- cs ]
                   newEdges = map (\(ch, i) -> (ptr, ch, i)) (zip children [0..])
+                  fnodes'' = (ptr, NodeInfo (format' n) path expanded children) : formattedNodes
               in (nodesFinal, fNodesFinal, childEdges ++ newEdges)
   where
     listApply f (ns, fns, es) xs =
@@ -818,9 +819,9 @@ plainUIFilters fs = mapM_ (uncurry renderUIFilterHtml) (zip fs (repeat (-1)))
 
 closureFormat :: ClosureDetails -> String
 closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $ 
-  [ payload
-  , "Address: " ++ closureShowAddress clo
-  , "Size: " ++ show (getSize excSize') ++ "B" ]
+  [ payload ]
+  --, "Address: " ++ closureShowAddress clo
+  --, "Size: " ++ show (getSize excSize') ++ "B" ]
   where payload = if savedObj label' && (head body /= '_' && '#' `notElem` body)
                     then takeWhile (/=' ') body
                     else trunc body
@@ -913,19 +914,21 @@ parseSort _ = error "invalid sort option"
 buildClosureGraph :: [String] -> [(String, NodeInfo)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
   mapM_ (\(n, nid) -> 
-            let NodeInfo fNode path expanded = maybe (NodeInfo "" [] False) id (lookup n fnodes)
+            let NodeInfo fNode path expanded cs = maybe (NodeInfo "" [] False []) id (lookup n fnodes)
                 urlAttr = if not expanded then [URL (TL.pack $ "http://localhost:3000/forceExpand?path=" ++ T.unpack (encodePath path))] else []
                 rootAttr = if path == [0] then [Data.GraphViz.style filled, if expanded then fillColor Yellow else fillColor GreenYellow, color Red] else []
                 expAttr = if path /= [0] && not expanded then [Data.GraphViz.style filled, fillColor Green] else [] 
                 attrs = urlAttr ++ rootAttr ++ expAttr
-            in node nid $ [ toLabel (pack fNode :: Text) ] ++ attrs
+                label = Label . StrLabel $ TL.pack ("{ " ++ fNode ++ " | { "
+                        ++ (List.intercalate "|" (map (\(x, eid) -> "<" ++ x ++ "--" ++ show eid ++ ">") (zip cs [0..]))) ++ "} }")
+            in trace fNode $ node nid $ [ label , Shape Record ] ++ attrs
         ) nids
   mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
-                      (Just x, Just y) -> edge x y [toLabel (pack (show eid) :: Text)]
+                      (Just x, Just y) -> edge x y [toLabel (show eid), TailPort $ LabelledPort (PN $ TL.pack (b ++ "--" ++ show eid)) Nothing]
                       z -> error ("Error in building closure graph: " ++ 
                                   "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
   where nids = zipWith (\n i -> (n,i)) nodes [1..]
-
+        
 
 histogramHtml :: Int -> [GD.Size] -> Html ()
 histogramHtml boxes m = do
@@ -1194,6 +1197,7 @@ handleImg expSubtree@(IOTreeNode (n', _, _) _) capped getName'' format' = do
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
       let graph = buildClosureGraph vizNodes fNodes vizEdges
+      --liftIO $ mapM_ print (graphStatements graph)
       let tweakGraph :: GraphvizCommand -> DotGraph Int -> DotGraph Int
           tweakGraph Dot g = g
           tweakGraph _ g = g { graphStatements = (graphStatements g) <> stmts }
@@ -1409,7 +1413,7 @@ app appStateRef = do
       Just f -> do
         let path = "tmp/prog.eventlog"
             suffix = init $ last $ splitOn "." $ show $ fileName f
-            isHeapProfile = if suffix == "hp" then True else False
+            isHeapProfile = suffix == "hp"
         liftIO $ BS.writeFile path (fileContent f)
         let checkTraces _ = return ()
             args = EA.Args 
