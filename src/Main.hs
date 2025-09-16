@@ -53,6 +53,7 @@ import Network.HTTP.Types (status409, status500)
 import System.Process
 import System.IO
 import Debug.Trace
+import Data.Char (isAlphaNum)
 
 import Control.Applicative
 import Control.Monad (forM)
@@ -822,12 +823,15 @@ closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $
   [ payload ]
   --, "Address: " ++ closureShowAddress clo
   --, "Size: " ++ show (getSize excSize') ++ "B" ]
-  where payload = if savedObj label' && (head body /= '_' && '#' `notElem` body)
-                    then takeWhile (/=' ') body
-                    else trunc body
+  where payload = if isList body then listify body
+                    else if savedObj label' && (head body /= '_' && '#' `notElem` body)
+                      then takeWhile (/=' ') body
+                      else trunc body
         savedObj s = (s == "Saved Object" || List.isPrefixOf "Field" s || s == "Indirectee")
         label' = T.unpack (_labelInParent inf)
         body = T.unpack (_pretty inf)
+        isList xs = ':' `elem` xs
+        listify xs = case words xs of [a, ":", b] -> "(:)"; _ -> xs
 closureFormat (InfoDetails inf) = T.unpack (_labelInParent inf)
 closureFormat (LabelNode l) = T.unpack l
 closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack clabel ++ "\n" ++ ccsFormat ccspayload
@@ -919,16 +923,19 @@ buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
                 rootAttr = if path == [0] then [Data.GraphViz.style filled, if expanded then fillColor Yellow else fillColor GreenYellow, color Red] else []
                 expAttr = if path /= [0] && not expanded then [Data.GraphViz.style filled, fillColor Green] else [] 
                 attrs = urlAttr ++ rootAttr ++ expAttr
-                label = Label . StrLabel $ TL.pack ("{ " ++ fNode ++ " | { "
-                        ++ (List.intercalate "|" (map (\(x, eid) -> "<" ++ x ++ "--" ++ show eid ++ ">") (zip cs [0..]))) ++ "} }")
-            in trace fNode $ node nid $ [ label , Shape Record ] ++ attrs
+                label = Label . StrLabel $ TL.pack ("{ " ++ sanitise fNode
+                        ++ (if null cs then "" else " | { " ++  ((List.intercalate "|" (map (\(x, eid) -> "<" ++ sanitise x ++ "--" ++ show eid ++ ">") (zip cs [0..]))) ++ "}")) ++ "}")
+            in node nid $ [ label , Shape Record ] ++ attrs
         ) nids
   mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
-                      (Just x, Just y) -> edge x y [toLabel (show eid), TailPort $ LabelledPort (PN $ TL.pack (b ++ "--" ++ show eid)) Nothing]
+                      (Just x, Just y) -> edge x y [{-toLabel (show eid),-} TailPort $ LabelledPort (PN $ TL.pack (sanitise b ++ "--" ++ show eid)) Nothing]
                       z -> error ("Error in building closure graph: " ++ 
                                   "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
   where nids = zipWith (\n i -> (n,i)) nodes [1..]
-        
+        sanitise = map replace --filter isAlphaNum
+        replace '{' = '['
+        replace '}' = ']'
+        replace c = c
 
 histogramHtml :: Int -> [GD.Size] -> Html ()
 histogramHtml boxes m = do
