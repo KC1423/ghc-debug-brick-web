@@ -834,8 +834,8 @@ closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $
         listify xs = case words xs of [a, ":", b] -> "(:)"; _ -> xs
 closureFormat (InfoDetails inf) = T.unpack (_labelInParent inf)
 closureFormat (LabelNode l) = T.unpack l
-closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack clabel ++ "\n" ++ ccsFormat ccspayload
-closureFormat (CCDetails clabel cc) = "Cost centre: " ++ T.unpack clabel ++ "\n" ++ ccFormat cc
+closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack clabel -- ++ "\n" ++ ccsFormat ccspayload
+closureFormat (CCDetails clabel cc) = T.unpack clabel--"Cost centre: " ++ T.unpack clabel ++ "\n" ++ ccFormat cc
 ccsFormat :: GenCCSPayload ccsPtr CCPayload -> [Char]
 ccsFormat Debug.CCSPayload{ccsCc = cc} = ccFormat cc
 ccFormat :: CCPayload -> [Char]
