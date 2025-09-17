@@ -1500,6 +1500,13 @@ app appStateRef = do
           SearchedHtml Utils{..} tree _ -> do
             cdio <- getCDIO tree selectedPath _getName _getSize _graphFormat forced
             updateImg appStateRef cdio forced      
+        newState <- liftIO $ readIORef appStateRef
+        case newState ^. majorState of
+          Connected _ _ (PausedMode newOs) -> do
+            svgContent <- liftIO $ _genSvg newOs
+            Scotty.setHeader "Content-Type" "text/plain; charset=utf-8"
+            Scotty.text $ svgContent
+          _ -> Scotty.redirect "/"
       _ -> Scotty.redirect "/"
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do
