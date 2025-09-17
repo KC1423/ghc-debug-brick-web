@@ -31,18 +31,38 @@ function fetchAndRender() {
 	}
 	return res.text();
       })
+      .then(dotSource => {
+        const viz = new Viz();
+	return viz.renderSVGElement(dotSource);
+      })
       .then(svg => {
-        container.innerHTML = svg;
-        document.getElementById('download-link').style.display = 'inline-block';
+	console.log(svg);
+        container.innerHTML = '';
+	container.appendChild(svg);
 
-        const element = document.querySelector('#svg-container svg');
-        panzoom(element, {
+        //const element = document.querySelector('#svg-container svg');
+        panzoom(svg/*element*/, {
           bounds: true,
           boundsPadding: 0.1,
           zoomDoubleClickSpeed: 1,
           maxZoom: 10,
           minZoom: 0.1
         });
+
+
+	const serializer = new XMLSerializer();
+        const svgString = serializer.serializeToString(svg);
+	const blob = new Blob([svgString], { type: "image/svg+xml" });
+	const blobUrl = URL.createObjectURL(blob);
+	const downloadLink = document.getElementById('download-link');
+	downloadLink.href = blobUrl;
+        downloadLink.style.display = 'inline-block';
+	downloadLink.download = 'graph.svg';
+	if (downloadLink._prevUrl) {
+          URL.revokeObjectURL(downloadLink._prevUrl);
+	}
+	downloadLink._prevUrl = blobUrl;
+
 
         svgLoaded = true;
       })

@@ -29,6 +29,7 @@ import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL, Shape, Label, 
 import Data.GraphViz.Types
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, DotStatement(GA))
+import Data.GraphViz.Printing (renderDot)
 import Web.Scotty.Internal.Types
 import Data.Functor.Identity (Identity)
 import Data.String (IsString)
@@ -514,6 +515,8 @@ renderMImg CDIO {..} = do
       Nothing -> renderEmptyImgPanel
       Just ImgInfo{..} -> renderImgPage _name _capped
   script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
+  script_ [src_ "https://cdn.jsdelivr.net/npm/viz.js@2.1.2/viz.js"] (mempty :: Html ())
+  script_ [src_ "https://cdn.jsdelivr.net/npm/viz.js@2.1.2/full.render.js"] (mempty :: Html ())
 
 renderEmptyImgPanel :: Html ()
 renderEmptyImgPanel = do
@@ -533,7 +536,7 @@ renderImgPage name capped = do
   p_ [id_ "capWarning"] (if capped then "Note: this is a very large object, and this graph is incomplete" else "")
   div_ [ id_ "toggleDiv", style_ "display: none;" ] $ do 
     body_ $ do
-      div_ $ a_ [ href_ "/graph.svg"
+      div_ $ a_ [ href_ "#" --"/graph.svg"
                 , id_ "download-link"
                 , download_ "graph.svg"
                 , style_ "display: none; margin-top: 1em;"
@@ -1209,11 +1212,12 @@ handleImg expSubtree@(IOTreeNode (n', _, _) _) capped getName'' format' = do
           tweakGraph Dot g = g
           tweakGraph _ g = g { graphStatements = (graphStatements g) <> stmts }
             where stmts = [ GA $ GraphAttrs [Overlap (PrismOverlap Nothing)] ] 
-      let svgContent comm = liftIO $ do 
+      {-let svgContent comm = liftIO $ do 
                               createDirectoryIfMissing True "tmp"
                               _ <- graphvizProcess comm svgPath (tweakGraph comm graph)
                               return ()
-      return $ Just $ ImgInfo name capped svgContent
+      return $ Just $ ImgInfo name capped svgContent-}
+      return $ Just $ ImgInfo name capped (return $ renderDot $ toDot graph)
     Nothing -> return Nothing
 
 closureGetName :: ClosureDetails -> Maybe String
@@ -1352,7 +1356,7 @@ app appStateRef = do
     case state ^. majorState of
       Connected _ _ (PausedMode os) -> do
         -- retrieve currently running task (if any) and set it to Nothing
-        mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
+        {-mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
           (st {currentTask = Nothing}, currentTask st)
         liftIO $ case mOldTask of
           Just oldTask -> do
@@ -1360,10 +1364,14 @@ app appStateRef = do
             case done of 
               Nothing -> cancel oldTask -- if the old task is still running, cancel it
               Just _ -> return ()
-          Nothing -> return ()
+          Nothing -> return ()-}
         -- set the async graph gen in the IO, then wait for it to finish
         fastMode <- fastModeParam Scotty.queryParam
-        newTask <- liftIO $ async $ _genSvg os (if fastMode then Sfdp else Dot) 
+        svgContent <- liftIO $ _genSvg os
+        Scotty.setHeader "Content-Type" "text/plain; charset=utf-8"
+        Scotty.text $ svgContent
+{-
+        newTask <- liftIO $ async $ _genSvg os --(if fastMode then Sfdp else Dot) 
         liftIO $ atomicModifyIORef' appStateRef $ \st -> (st {currentTask = Just newTask}, ())
         result <- liftIO $ E.try (wait newTask) :: Scotty.ActionM (Either E.SomeException ())
         case result of
@@ -1379,6 +1387,7 @@ app appStateRef = do
                 Scotty.status status500
                 liftIO $ putStrLn $ "Render task failed: " ++ show e
                 Scotty.text "failed"
+-}
       _ -> Scotty.redirect "/"
   {- Serves the profile dump file -}
   Scotty.get "/download-profile" $ do
@@ -1546,7 +1555,7 @@ app appStateRef = do
                               (Just 100)
                               []
                               ver 
-                              (const $ return ())
+                              (return "")--(const $ return ())
                               [[]]
             newAppState = state & majorState . mode .~ pausedState
         liftIO $ writeIORef appStateRef newAppState

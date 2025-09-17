@@ -28,6 +28,7 @@ import System.Directory
 import System.FilePath
 import Data.Text(Text, pack)
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
 import Text.Read
 
 import Namespace
@@ -139,7 +140,7 @@ data ClosureDetails = ClosureDetails
 data ImgInfo = ImgInfo
   { _name :: String 
   , _capped :: Bool
-  , _svgContent :: GraphvizCommand -> IO ()
+  , _svgContent :: IO TL.Text --GraphvizCommand -> IO ()
   }
 
 data CDIO = CDIO 
@@ -193,7 +194,7 @@ data OperationalState = OperationalState
     , _resultSize :: Maybe Int
     , _filters :: [UIFilter]
     , _version :: GD.Version
-    , _genSvg :: GraphvizCommand -> IO ()
+    , _genSvg :: IO TL.Text --GraphvizCommand -> IO ()
     , _forceExpand :: [[Int]] 
     }
 
