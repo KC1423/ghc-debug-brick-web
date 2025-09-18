@@ -515,8 +515,6 @@ renderMImg CDIO {..} = do
       Nothing -> renderEmptyImgPanel
       Just ImgInfo{..} -> renderImgPage _name _capped
   script_ [src_ "https://cdn.jsdelivr.net/npm/panzoom@9.4.0/dist/panzoom.min.js"] (mempty :: Html ())
-  script_ [src_ "https://cdn.jsdelivr.net/npm/viz.js@2.1.2/viz.js"] (mempty :: Html ())
-  script_ [src_ "https://cdn.jsdelivr.net/npm/viz.js@2.1.2/full.render.js"] (mempty :: Html ())
 
 renderEmptyImgPanel :: Html ()
 renderEmptyImgPanel = do
@@ -918,9 +916,9 @@ parseSort "number" = EA.Number
 parseSort "gradient" = EA.Gradient
 parseSort _ = error "invalid sort option"
 
-buildClosureGraph :: [String] -> [(String, NodeInfo)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
+buildClosureGraph :: [String] -> [(String, NodeInfo)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph String
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
-  mapM_ (\(n, nid) -> 
+  mapM_ (\n -> 
             let NodeInfo fNode path expanded cs = maybe (NodeInfo "" [] False []) id (lookup n fnodes)
                 urlAttr = if not expanded then [URL (TL.pack $ "http://localhost:3000/forceExpand?path=" ++ T.unpack (encodePath path))] else []
                 rootAttr = if path == [0] then [Data.GraphViz.style filled, if expanded then fillColor Yellow else fillColor GreenYellow, color Red] else []
@@ -928,14 +926,10 @@ buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
                 attrs = urlAttr ++ rootAttr ++ expAttr
                 label = Label . StrLabel $ TL.pack ("{ " ++ sanitise fNode
                         ++ (if null cs then "" else " | { " ++  ((List.intercalate "|" (map (\(x, eid) -> "<" ++ sanitise x ++ "--" ++ show eid ++ ">") (zip cs [0..]))) ++ "}")) ++ "}")
-            in node nid $ [ label , Shape Record ] ++ attrs
-        ) nids
-  mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
-                      (Just x, Just y) -> edge x y [{-toLabel (show eid),-} TailPort $ LabelledPort (PN $ TL.pack (sanitise b ++ "--" ++ show eid)) Nothing]
-                      z -> error ("Error in building closure graph: " ++ 
-                                  "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
-  where nids = zipWith (\n i -> (n,i)) nodes [1..]
-        sanitise = map replace --filter isAlphaNum
+            in node n $ [ label , Shape Record ] ++ attrs
+        ) nodes
+  mapM_ (\(a, b, eid) -> edge a b [TailPort $ LabelledPort (PN $ TL.pack (sanitise b ++ "--" ++ show eid)) Nothing]) edges
+  where sanitise = map replace
         replace '{' = '['
         replace '}' = ']'
         replace c = c
@@ -1206,10 +1200,8 @@ handleImg expSubtree@(IOTreeNode (n', _, _) _) capped getName'' format' = do
       let name = getName' n'
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
-      liftIO $ print $ show (length vizNodes) ++ " " ++ show (length vizEdges)
       let graph = buildClosureGraph vizNodes fNodes vizEdges
-      --liftIO $ mapM_ print (graphStatements graph)
-      let tweakGraph :: GraphvizCommand -> DotGraph Int -> DotGraph Int
+      let tweakGraph :: GraphvizCommand -> DotGraph a -> DotGraph a
           tweakGraph Dot g = g
           tweakGraph _ g = g { graphStatements = (graphStatements g) <> stmts }
             where stmts = [ GA $ GraphAttrs [Overlap (PrismOverlap Nothing)] ] 
