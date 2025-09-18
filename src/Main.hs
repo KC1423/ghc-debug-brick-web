@@ -24,8 +24,8 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphvizCommand(..), toLabel, isGraphvizInstalled, style, filled, color, X11Color(Yellow, Red, Green, GreenYellow), fillColor) 
-import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL), Overlap(PrismOverlap))
+import Data.GraphViz (GraphvizCommand(..), isGraphvizInstalled, style, filled, color, X11Color(Yellow, Red, Green, GreenYellow), fillColor) 
+import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL, Shape, Label, TailPort), Overlap(PrismOverlap), Shape(Record), Label(StrLabel), PortName(..), PortPos(..))
 import Data.GraphViz.Types
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, DotStatement(GA))
@@ -777,14 +777,14 @@ getClosureVizTree getName' format' nodes formattedNodes edges (IOTreeNode (n, pa
   in if Set.member ptr nodes
      then (nodes, formattedNodes, [])
      else case csE of
-            Left _ -> (Set.insert ptr nodes, (ptr, (NodeInfo (format' n) path False)) : formattedNodes, [])
+            Left _ -> (Set.insert ptr nodes, (ptr, (NodeInfo (format' n) path False [])) : formattedNodes, [])
             Right cs -> 
               let nodes'' = Set.insert ptr nodes
-                  fnodes'' = (ptr, NodeInfo (format' n) path expanded) : formattedNodes
                   (nodesFinal, fNodesFinal, childEdges) = listApply (getClosureVizTree getName' format') (nodes'', fnodes'', edges) cs
                   children = [ getName' n'
                              | IOTreeNode (n', _, _) _ <- cs ]
                   newEdges = map (\(ch, i) -> (ptr, ch, i)) (zip children [0..])
+                  fnodes'' = (ptr, NodeInfo (format' n) path expanded children) : formattedNodes
               in (nodesFinal, fNodesFinal, childEdges ++ newEdges)
   where
     listApply f (ns, fns, es) xs =
@@ -817,20 +817,21 @@ plainUIFilters :: [UIFilter] -> Html ()
 plainUIFilters fs = mapM_ (uncurry renderUIFilterHtml) (zip fs (repeat (-1)))
 
 closureFormat :: ClosureDetails -> String
-closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $ 
-  [ payload
-  , "Address: " ++ closureShowAddress clo
-  , "Size: " ++ show (getSize excSize') ++ "B" ]
-  where payload = if savedObj label' && (head body /= '_' && '#' `notElem` body)
-                    then takeWhile (/=' ') body
-                    else trunc body
+closureFormat (ClosureDetails _ _ inf) = List.intercalate "\n" $ 
+  [ payload ]
+  where payload = if isList body then listify body
+                    else if savedObj label' && (head body /= '_' && '#' `notElem` body)
+                      then takeWhile (/=' ') body
+                      else trunc body
         savedObj s = (s == "Saved Object" || List.isPrefixOf "Field" s || s == "Indirectee")
         label' = T.unpack (_labelInParent inf)
         body = T.unpack (_pretty inf)
+        isList xs = ':' `elem` xs
+        listify xs = case words xs of [_, ":", _] -> "(:)"; _ -> xs
 closureFormat (InfoDetails inf) = T.unpack (_labelInParent inf)
 closureFormat (LabelNode l) = T.unpack l
-closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack clabel ++ "\n" ++ ccsFormat ccspayload
-closureFormat (CCDetails clabel cc) = "Cost centre: " ++ T.unpack clabel ++ "\n" ++ ccFormat cc
+closureFormat (CCSDetails clabel _ _) = T.unpack clabel
+closureFormat (CCDetails clabel _) = T.unpack clabel
 ccsFormat :: GenCCSPayload ccsPtr CCPayload -> [Char]
 ccsFormat Debug.CCSPayload{ccsCc = cc} = ccFormat cc
 ccFormat :: CCPayload -> [Char]
@@ -910,22 +911,23 @@ parseSort "number" = EA.Number
 parseSort "gradient" = EA.Gradient
 parseSort _ = error "invalid sort option"
 
-buildClosureGraph :: [String] -> [(String, NodeInfo)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph Int
+buildClosureGraph :: [String] -> [(String, NodeInfo)] -> EdgeList -> Data.GraphViz.Types.Generalised.DotGraph String
 buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
-  mapM_ (\(n, nid) -> 
-            let NodeInfo fNode path expanded = maybe (NodeInfo "" [] False) id (lookup n fnodes)
+  mapM_ (\n -> 
+            let NodeInfo fNode path expanded cs = maybe (NodeInfo "" [] False []) id (lookup n fnodes)
                 urlAttr = if not expanded then [URL (TL.pack $ "http://localhost:3000/forceExpand?path=" ++ T.unpack (encodePath path))] else []
                 rootAttr = if path == [0] then [Data.GraphViz.style filled, if expanded then fillColor Yellow else fillColor GreenYellow, color Red] else []
                 expAttr = if path /= [0] && not expanded then [Data.GraphViz.style filled, fillColor Green] else [] 
                 attrs = urlAttr ++ rootAttr ++ expAttr
-            in node nid $ [ toLabel (pack fNode :: Text) ] ++ attrs
-        ) nids
-  mapM_ (\(a, b, eid) -> case (lookup a nids, lookup b nids) of
-                      (Just x, Just y) -> edge x y [toLabel (pack (show eid) :: Text)]
-                      z -> error ("Error in building closure graph: " ++ 
-                                  "Arg a: " ++ a ++ ", Arg b: " ++ b ++ " -> " ++ (show z) ++ " -- nids : " ++ show nids)) edges
-  where nids = zipWith (\n i -> (n,i)) nodes [1..]
-
+                label' = Label . StrLabel $ TL.pack ("{ " ++ sanitise fNode
+                         ++ (if null cs then "" else " | { " ++  ((List.intercalate "|" (map (\(x, eid) -> "<" ++ sanitise x ++ "--" ++ show eid ++ ">") (zip cs ([0..] :: [Int])))) ++ "}")) ++ "}")
+            in node n $ [ label' , Shape Record ] ++ attrs
+        ) nodes
+  mapM_ (\(a, b, eid) -> edge a b [TailPort $ LabelledPort (PN $ TL.pack (sanitise b ++ "--" ++ show eid)) Nothing]) edges
+  where sanitise = map replace
+        replace '{' = '['
+        replace '}' = ']'
+        replace c = c
 
 histogramHtml :: Int -> [GD.Size] -> Html ()
 histogramHtml boxes m = do
@@ -1194,7 +1196,7 @@ handleImg expSubtree@(IOTreeNode (n', _, _) _) capped getName'' format' = do
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
       let graph = buildClosureGraph vizNodes fNodes vizEdges
-      let tweakGraph :: GraphvizCommand -> DotGraph Int -> DotGraph Int
+      let tweakGraph :: GraphvizCommand -> DotGraph a -> DotGraph a
           tweakGraph Dot g = g
           tweakGraph _ g = g { graphStatements = (graphStatements g) <> stmts }
             where stmts = [ GA $ GraphAttrs [Overlap (PrismOverlap Nothing)] ] 
@@ -1325,6 +1327,38 @@ handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
   let capWarning = if imgCap cdio then "Note: this is a very large object, and this graph is incomplete" else "" :: String
   Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle, "capWarning" .= capWarning]
 
+renderGraph :: IORef AppState -> OperationalState -> ActionT IO ()
+renderGraph appStateRef os = do 
+  -- retrieve currently running task (if any) and set it to Nothing
+  mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
+    (st {currentTask = Nothing}, currentTask st)
+  liftIO $ case mOldTask of
+    Just oldTask -> do
+      done <- poll oldTask
+      case done of 
+        Nothing -> cancel oldTask -- if the old task is still running, cancel it
+        Just _ -> return ()
+    Nothing -> return ()
+  -- set the async graph gen in the IO, then wait for it to finish
+  fastMode <- fastModeParam Scotty.queryParam
+  newTask <- liftIO $ async $ _genSvg os (if fastMode then Sfdp else Dot) 
+  liftIO $ atomicModifyIORef' appStateRef $ \st -> (st {currentTask = Just newTask}, ())
+  result <- liftIO $ E.try (wait newTask) :: Scotty.ActionM (Either E.SomeException ())
+  case result of
+    Right _ -> do -- serve the file on successful completion
+      Scotty.setHeader "Content-Type" "image/svg+xml"
+      Scotty.file svgPath
+    Left e -> do
+      case E.fromException e of
+        Just AsyncCancelled -> do -- error can be ignored, new graph is already loading
+          Scotty.status status409
+          Scotty.text "cancelled"
+        _ -> do -- an actual error, display "Failed to load graph"
+          Scotty.status status500
+          liftIO $ putStrLn $ "Render task failed: " ++ show e
+          Scotty.text "failed"
+
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
@@ -1339,35 +1373,7 @@ app appStateRef = do
     Scotty.addHeader "Expires" "0"
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected _ _ (PausedMode os) -> do
-        -- retrieve currently running task (if any) and set it to Nothing
-        mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
-          (st {currentTask = Nothing}, currentTask st)
-        liftIO $ case mOldTask of
-          Just oldTask -> do
-            done <- poll oldTask
-            case done of 
-              Nothing -> cancel oldTask -- if the old task is still running, cancel it
-              Just _ -> return ()
-          Nothing -> return ()
-        -- set the async graph gen in the IO, then wait for it to finish
-        fastMode <- fastModeParam Scotty.queryParam
-        newTask <- liftIO $ async $ _genSvg os (if fastMode then Sfdp else Dot) 
-        liftIO $ atomicModifyIORef' appStateRef $ \st -> (st {currentTask = Just newTask}, ())
-        result <- liftIO $ E.try (wait newTask) :: Scotty.ActionM (Either E.SomeException ())
-        case result of
-          Right _ -> do -- serve the file on successful completion
-            Scotty.setHeader "Content-Type" "image/svg+xml"
-            Scotty.file svgPath
-          Left e -> do
-            case E.fromException e of
-              Just AsyncCancelled -> do -- error can be ignored, new graph is already loading
-                Scotty.status status409
-                Scotty.text "cancelled"
-              _ -> do -- an actual error, display "Failed to load graph"
-                Scotty.status status500
-                liftIO $ putStrLn $ "Render task failed: " ++ show e
-                Scotty.text "failed"
+      Connected _ _ (PausedMode os) -> renderGraph appStateRef os
       _ -> Scotty.redirect "/"
   {- Serves the profile dump file -}
   Scotty.get "/download-profile" $ do
@@ -1409,7 +1415,7 @@ app appStateRef = do
       Just f -> do
         let path = "tmp/prog.eventlog"
             suffix = init $ last $ splitOn "." $ show $ fileName f
-            isHeapProfile = if suffix == "hp" then True else False
+            isHeapProfile = suffix == "hp"
         liftIO $ BS.writeFile path (fileContent f)
         let checkTraces _ = return ()
             args = EA.Args 
@@ -1480,6 +1486,10 @@ app appStateRef = do
           SearchedHtml Utils{..} tree _ -> do
             cdio <- getCDIO tree selectedPath _getName _getSize _graphFormat forced
             updateImg appStateRef cdio forced      
+        newState <- liftIO $ readIORef appStateRef
+        case newState ^. majorState of
+          Connected _ _ (PausedMode newOs) -> renderGraph appStateRef newOs
+          _ -> Scotty.redirect "/"
       _ -> Scotty.redirect "/"
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
   Scotty.get "/connect" $ do

@@ -45,6 +45,7 @@ data NodeInfo = NodeInfo
   { formatted :: String
   , path :: [Int]
   , expanded :: Bool
+  , children :: [String]
   }
 
 

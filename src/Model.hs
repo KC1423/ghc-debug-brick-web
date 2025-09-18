@@ -28,6 +28,7 @@ import System.Directory
 import System.FilePath
 import Data.Text(Text, pack)
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
 import Text.Read
 
 import Namespace

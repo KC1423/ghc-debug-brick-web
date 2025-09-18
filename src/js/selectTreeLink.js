@@ -1,4 +1,5 @@
 let svgLoaded = false;
+let panzoomInstance = null;
 
 function fastModeToggle() {
   const graphDiv = document.getElementById('toggleDiv');
@@ -31,18 +32,23 @@ function fetchAndRender() {
 	}
 	return res.text();
       })
-      .then(svg => {
-        container.innerHTML = svg;
-        document.getElementById('download-link').style.display = 'inline-block';
+      .then(svgText => {
+	const parser = new DOMParser();
+	const doc = parser.parseFromString(svgText, "image/svg+xml");
+	const svg = doc.querySelector('svg');
+        container.innerHTML = '';
+	container.appendChild(svg);
 
-        const element = document.querySelector('#svg-container svg');
-        panzoom(element, {
+        panzoomInstance = panzoom(svg, {
           bounds: true,
           boundsPadding: 0.1,
           zoomDoubleClickSpeed: 1,
           maxZoom: 10,
           minZoom: 0.1
         });
+
+	const downloadLink = document.getElementById('download-link');
+        downloadLink.style.display = 'inline-block';
 
         svgLoaded = true;
       })
@@ -156,22 +162,62 @@ function updateSelection(pathStr) {
 }
 
 function forceExpandPath(path) {
+  svgLoaded = false;
+  const downloadLink = document.getElementById('download-link');
+  downloadLink.style.display = 'inline-block';
+
+
   const url = new URL(window.location.href);
   let selected = url.searchParams.get('selected');
   if (!selected) {
     selected = "0" 
   }
   fetch(`/forceExpand?selected=${selected}&force=${path}`)
-    .then(x => { 
-      svgLoaded = false;
-      fetchAndRender();
-    })
+      .then(res => {
+	if (!res.ok) {
+          return res.text().then(msg => {
+            throw new Error(msg);
+	  });
+	}
+	return res.text();
+      })
+      .then(svgText => {
+        const parser = new DOMParser();
+	const doc = parser.parseFromString(svgText, "image/svg+xml");
+	const svg = doc.querySelector('svg');
+
+
+	const container = document.getElementById('svg-container');
+        const transform = panzoomInstance.getTransform();
+        container.innerHTML = '';
+	container.appendChild(svg);
+
+        panzoomInstance = panzoom(svg, {
+          bounds: true,
+          boundsPadding: 0.1,
+          zoomDoubleClickSpeed: 1,
+          maxZoom: 10,
+          minZoom: 0.1
+        });
+        panzoomInstance.moveTo(transform.x, transform.y);
+	panzoomInstance.zoomAbs(transform.x, transform.y, transform.scale);
+
+	const downloadLink = document.getElementById('download-link');
+        downloadLink.style.display = 'inline-block';
+
+
+        svgLoaded = true;
+      })
     .catch(err => {
-      console.error("An error occurred:", err);
+	if (err.message === 'cancelled') {
+        console.log('Render cancelled - staying in loading state');
+        return;
+      }
+      console.error('Failed to load graph:', err);
+      container.innerHTML = '<p style="color: red;">Failed to load graph.</p>';
     });
+
 }
-
-
 
 // Event delegation to handle all future <a> clicks
 document.addEventListener('DOMContentLoaded', function () {
