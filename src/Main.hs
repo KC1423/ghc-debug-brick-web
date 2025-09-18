@@ -536,7 +536,7 @@ renderImgPage name capped = do
   p_ [id_ "capWarning"] (if capped then "Note: this is a very large object, and this graph is incomplete" else "")
   div_ [ id_ "toggleDiv", style_ "display: none;" ] $ do 
     body_ $ do
-      div_ $ a_ [ href_ "#" --"/graph.svg"
+      div_ $ a_ [ href_ "/graph.svg"
                 , id_ "download-link"
                 , download_ "graph.svg"
                 , style_ "display: none; margin-top: 1em;"
@@ -1206,18 +1206,18 @@ handleImg expSubtree@(IOTreeNode (n', _, _) _) capped getName'' format' = do
       let name = getName' n'
       let (nodes', fNodes, vizEdges) = getClosureVizTree getName' format' Set.empty [] [] expSubtree
       let vizNodes = Set.toList nodes'
+      liftIO $ print $ show (length vizNodes) ++ " " ++ show (length vizEdges)
       let graph = buildClosureGraph vizNodes fNodes vizEdges
       --liftIO $ mapM_ print (graphStatements graph)
       let tweakGraph :: GraphvizCommand -> DotGraph Int -> DotGraph Int
           tweakGraph Dot g = g
           tweakGraph _ g = g { graphStatements = (graphStatements g) <> stmts }
             where stmts = [ GA $ GraphAttrs [Overlap (PrismOverlap Nothing)] ] 
-      {-let svgContent comm = liftIO $ do 
+      let svgContent comm = liftIO $ do 
                               createDirectoryIfMissing True "tmp"
                               _ <- graphvizProcess comm svgPath (tweakGraph comm graph)
                               return ()
-      return $ Just $ ImgInfo name capped svgContent-}
-      return $ Just $ ImgInfo name capped (return $ renderDot $ toDot graph)
+      return $ Just $ ImgInfo name capped svgContent
     Nothing -> return Nothing
 
 closureGetName :: ClosureDetails -> Maybe String
@@ -1340,6 +1340,37 @@ handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
   let capWarning = if imgCap cdio then "Note: this is a very large object, and this graph is incomplete" else "" :: String
   Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle, "capWarning" .= capWarning]
 
+renderGraph appStateRef os = do 
+  -- retrieve currently running task (if any) and set it to Nothing
+  mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
+    (st {currentTask = Nothing}, currentTask st)
+  liftIO $ case mOldTask of
+    Just oldTask -> do
+      done <- poll oldTask
+      case done of 
+        Nothing -> cancel oldTask -- if the old task is still running, cancel it
+        Just _ -> return ()
+    Nothing -> return ()
+  -- set the async graph gen in the IO, then wait for it to finish
+  fastMode <- fastModeParam Scotty.queryParam
+  newTask <- liftIO $ async $ _genSvg os (if fastMode then Sfdp else Dot) 
+  liftIO $ atomicModifyIORef' appStateRef $ \st -> (st {currentTask = Just newTask}, ())
+  result <- liftIO $ E.try (wait newTask) :: Scotty.ActionM (Either E.SomeException ())
+  case result of
+    Right _ -> do -- serve the file on successful completion
+      Scotty.setHeader "Content-Type" "image/svg+xml"
+      Scotty.file svgPath
+    Left e -> do
+      case E.fromException e of
+        Just AsyncCancelled -> do -- error can be ignored, new graph is already loading
+          Scotty.status status409
+          Scotty.text "cancelled"
+        _ -> do -- an actual error, display "Failed to load graph"
+          Scotty.status status500
+          liftIO $ putStrLn $ "Render task failed: " ++ show e
+          Scotty.text "failed"
+
+
 app :: IORef AppState -> Scotty.ScottyM ()
 app appStateRef = do
   {- Serves the visualisation of the selected object -}
@@ -1354,40 +1385,7 @@ app appStateRef = do
     Scotty.addHeader "Expires" "0"
     state <- liftIO $ readIORef appStateRef
     case state ^. majorState of
-      Connected _ _ (PausedMode os) -> do
-        -- retrieve currently running task (if any) and set it to Nothing
-        {-mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
-          (st {currentTask = Nothing}, currentTask st)
-        liftIO $ case mOldTask of
-          Just oldTask -> do
-            done <- poll oldTask
-            case done of 
-              Nothing -> cancel oldTask -- if the old task is still running, cancel it
-              Just _ -> return ()
-          Nothing -> return ()-}
-        -- set the async graph gen in the IO, then wait for it to finish
-        fastMode <- fastModeParam Scotty.queryParam
-        svgContent <- liftIO $ _genSvg os
-        Scotty.setHeader "Content-Type" "text/plain; charset=utf-8"
-        Scotty.text $ svgContent
-{-
-        newTask <- liftIO $ async $ _genSvg os --(if fastMode then Sfdp else Dot) 
-        liftIO $ atomicModifyIORef' appStateRef $ \st -> (st {currentTask = Just newTask}, ())
-        result <- liftIO $ E.try (wait newTask) :: Scotty.ActionM (Either E.SomeException ())
-        case result of
-          Right _ -> do -- serve the file on successful completion
-            Scotty.setHeader "Content-Type" "image/svg+xml"
-            Scotty.file svgPath
-          Left e -> do
-            case E.fromException e of
-              Just AsyncCancelled -> do -- error can be ignored, new graph is already loading
-                Scotty.status status409
-                Scotty.text "cancelled"
-              _ -> do -- an actual error, display "Failed to load graph"
-                Scotty.status status500
-                liftIO $ putStrLn $ "Render task failed: " ++ show e
-                Scotty.text "failed"
--}
+      Connected _ _ (PausedMode os) -> renderGraph appStateRef os
       _ -> Scotty.redirect "/"
   {- Serves the profile dump file -}
   Scotty.get "/download-profile" $ do
@@ -1502,10 +1500,7 @@ app appStateRef = do
             updateImg appStateRef cdio forced      
         newState <- liftIO $ readIORef appStateRef
         case newState ^. majorState of
-          Connected _ _ (PausedMode newOs) -> do
-            svgContent <- liftIO $ _genSvg newOs
-            Scotty.setHeader "Content-Type" "text/plain; charset=utf-8"
-            Scotty.text $ svgContent
+          Connected _ _ (PausedMode newOs) -> renderGraph appStateRef newOs
           _ -> Scotty.redirect "/"
       _ -> Scotty.redirect "/"
   {- GET version of /connect, in case / is accessed while already connected to a debuggee -}
@@ -1562,7 +1557,7 @@ app appStateRef = do
                               (Just 100)
                               []
                               ver 
-                              (return "")--(const $ return ())
+                              (const $ return ())
                               [[]]
             newAppState = state & majorState . mode .~ pausedState
         liftIO $ writeIORef appStateRef newAppState

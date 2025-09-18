@@ -32,11 +32,10 @@ function fetchAndRender() {
 	}
 	return res.text();
       })
-      .then(dotSource => {
-        const viz = new Viz();
-	return viz.renderSVGElement(dotSource);
-      })
-      .then(svg => {
+      .then(svgText => {
+	const parser = new DOMParser();
+	const doc = parser.parseFromString(svgText, "image/svg+xml");
+	const svg = doc.querySelector('svg');
         container.innerHTML = '';
 	container.appendChild(svg);
 
@@ -50,18 +49,12 @@ function fetchAndRender() {
         });
 
 
-	const serializer = new XMLSerializer();
+	/*const serializer = new XMLSerializer();
         const svgString = serializer.serializeToString(svg);
 	const blob = new Blob([svgString], { type: "image/svg+xml" });
-	const blobUrl = URL.createObjectURL(blob);
+	const blobUrl = URL.createObjectURL(blob);*/
 	const downloadLink = document.getElementById('download-link');
-	downloadLink.href = blobUrl;
         downloadLink.style.display = 'inline-block';
-	downloadLink.download = 'graph.svg';
-	if (downloadLink._prevUrl) {
-          URL.revokeObjectURL(downloadLink._prevUrl);
-	}
-	downloadLink._prevUrl = blobUrl;
 
 
         svgLoaded = true;
@@ -176,6 +169,11 @@ function updateSelection(pathStr) {
 }
 
 function forceExpandPath(path) {
+  svgLoaded = false;
+  const downloadLink = document.getElementById('download-link');
+  downloadLink.style.display = 'inline-block';
+
+
   const url = new URL(window.location.href);
   let selected = url.searchParams.get('selected');
   if (!selected) {
@@ -190,20 +188,17 @@ function forceExpandPath(path) {
 	}
 	return res.text();
       })
-      .then(dotSource => {
-        const viz = new Viz();
-	return viz.renderSVGElement(dotSource);
-      })
-      .then(svg => {
+      .then(svgText => {
+        const parser = new DOMParser();
+	const doc = parser.parseFromString(svgText, "image/svg+xml");
+	const svg = doc.querySelector('svg');
 
-//	applyGraphDiff(document.querySelector('#svg-container svg'), svg)
+
 	const container = document.getElementById('svg-container');
         const transform = panzoomInstance.getTransform();
-	console.log(transform);
         container.innerHTML = '';
 	container.appendChild(svg);
 
-        //const element = document.querySelector('#svg-container svg');
         panzoomInstance = panzoom(svg, {
           bounds: true,
           boundsPadding: 0.1,
@@ -214,25 +209,21 @@ function forceExpandPath(path) {
         panzoomInstance.moveTo(transform.x, transform.y);
 	panzoomInstance.zoomAbs(transform.x, transform.y, transform.scale);
 
-	const serializer = new XMLSerializer();
-        const svgString = serializer.serializeToString(svg);
-	const blob = new Blob([svgString], { type: "image/svg+xml" });
-	const blobUrl = URL.createObjectURL(blob);
 	const downloadLink = document.getElementById('download-link');
-	downloadLink.href = blobUrl;
         downloadLink.style.display = 'inline-block';
-	downloadLink.download = 'graph.svg';
-	if (downloadLink._prevUrl) {
-          URL.revokeObjectURL(downloadLink._prevUrl);
-	}
-	downloadLink._prevUrl = blobUrl;
 
 
         svgLoaded = true;
       })
     .catch(err => {
-      console.error("An error occurred:", err);
+	if (err.message === 'cancelled') {
+        console.log('Render cancelled - staying in loading state');
+        return;
+      }
+      console.error('Failed to load graph:', err);
+      container.innerHTML = '<p style="color: red;">Failed to load graph.</p>';
     });
+
 }
 
 /*

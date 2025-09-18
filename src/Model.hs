@@ -140,7 +140,7 @@ data ClosureDetails = ClosureDetails
 data ImgInfo = ImgInfo
   { _name :: String 
   , _capped :: Bool
-  , _svgContent :: IO TL.Text --GraphvizCommand -> IO ()
+  , _svgContent :: GraphvizCommand -> IO ()
   }
 
 data CDIO = CDIO 
@@ -194,7 +194,7 @@ data OperationalState = OperationalState
     , _resultSize :: Maybe Int
     , _filters :: [UIFilter]
     , _version :: GD.Version
-    , _genSvg :: IO TL.Text --GraphvizCommand -> IO ()
+    , _genSvg :: GraphvizCommand -> IO ()
     , _forceExpand :: [[Int]] 
     }
 
