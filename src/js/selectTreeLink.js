@@ -39,8 +39,7 @@ function fetchAndRender() {
         container.innerHTML = '';
 	container.appendChild(svg);
 
-        //const element = document.querySelector('#svg-container svg');
-        panzoomInstance = panzoom(svg/*element*/, {
+        panzoomInstance = panzoom(svg, {
           bounds: true,
           boundsPadding: 0.1,
           zoomDoubleClickSpeed: 1,
@@ -48,14 +47,8 @@ function fetchAndRender() {
           minZoom: 0.1
         });
 
-
-	/*const serializer = new XMLSerializer();
-        const svgString = serializer.serializeToString(svg);
-	const blob = new Blob([svgString], { type: "image/svg+xml" });
-	const blobUrl = URL.createObjectURL(blob);*/
 	const downloadLink = document.getElementById('download-link');
         downloadLink.style.display = 'inline-block';
-
 
         svgLoaded = true;
       })
@@ -225,39 +218,6 @@ function forceExpandPath(path) {
     });
 
 }
-
-/*
-function applyGraphDiff(oldSvg, newSvg) {
-  const oldGraph = oldSvg.querySelector('g#graph0');
-  const newGraph = newSvg.querySelector('g#graph0');
-
-  const oldNodes = new Map();
-  const oldEdges = new Map();
-  
-  oldGraph.querySelectorAll('g.node').forEach(node => {
-    const id = node.id;
-    if (id) oldNodes.set(id, node);
-  });
-  oldGraph.querySelectorAll('g.edge').forEach(edge => {
-    const id = edge.id;
-    if (id) oldEdges.set(id, edge);
-  });
-  newGraph.querySelectorAll('g.node').forEach(node => {
-    const id = node.id;
-    if (!oldNodes.has(id)) {
-      console.log(id);
-      oldGraph.appendChild(node.cloneNode(true));
-    }
-  });
-  newGraph.querySelectorAll('g.edge').forEach(edge => {
-    const id = edge.id;
-    if (!oldEdges.has(id)) {
-      console.log(id);
-      oldGraph.appendChild(edge.cloneNode(true));
-    }
-  });
-}
-*/
 
 // Event delegation to handle all future <a> clicks
 document.addEventListener('DOMContentLoaded', function () {

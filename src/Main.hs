@@ -24,12 +24,11 @@ import Lucid
 import qualified Control.Exception as E
 import qualified Data.Set as Set
 import Data.List.Split (splitOn)
-import Data.GraphViz (GraphvizCommand(..), toLabel, isGraphvizInstalled, style, filled, color, X11Color(Yellow, Red, Green, GreenYellow), fillColor) 
+import Data.GraphViz (GraphvizCommand(..), isGraphvizInstalled, style, filled, color, X11Color(Yellow, Red, Green, GreenYellow), fillColor) 
 import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL, Shape, Label, TailPort), Overlap(PrismOverlap), Shape(Record), Label(StrLabel), PortName(..), PortPos(..))
 import Data.GraphViz.Types
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, DotStatement(GA))
-import Data.GraphViz.Printing (renderDot)
 import Web.Scotty.Internal.Types
 import Data.Functor.Identity (Identity)
 import Data.String (IsString)
@@ -53,8 +52,6 @@ import Control.Concurrent.Async
 import Network.HTTP.Types (status409, status500)
 import System.Process
 import System.IO
-import Debug.Trace
-import Data.Char (isAlphaNum)
 
 import Control.Applicative
 import Control.Monad (forM)
@@ -820,10 +817,8 @@ plainUIFilters :: [UIFilter] -> Html ()
 plainUIFilters fs = mapM_ (uncurry renderUIFilterHtml) (zip fs (repeat (-1)))
 
 closureFormat :: ClosureDetails -> String
-closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $ 
+closureFormat (ClosureDetails _ _ inf) = List.intercalate "\n" $ 
   [ payload ]
-  --, "Address: " ++ closureShowAddress clo
-  --, "Size: " ++ show (getSize excSize') ++ "B" ]
   where payload = if isList body then listify body
                     else if savedObj label' && (head body /= '_' && '#' `notElem` body)
                       then takeWhile (/=' ') body
@@ -832,11 +827,11 @@ closureFormat (ClosureDetails clo excSize' inf) = List.intercalate "\n" $
         label' = T.unpack (_labelInParent inf)
         body = T.unpack (_pretty inf)
         isList xs = ':' `elem` xs
-        listify xs = case words xs of [a, ":", b] -> "(:)"; _ -> xs
+        listify xs = case words xs of [_, ":", _] -> "(:)"; _ -> xs
 closureFormat (InfoDetails inf) = T.unpack (_labelInParent inf)
 closureFormat (LabelNode l) = T.unpack l
-closureFormat (CCSDetails clabel _cptr ccspayload) = T.unpack clabel -- ++ "\n" ++ ccsFormat ccspayload
-closureFormat (CCDetails clabel cc) = T.unpack clabel--"Cost centre: " ++ T.unpack clabel ++ "\n" ++ ccFormat cc
+closureFormat (CCSDetails clabel _ _) = T.unpack clabel
+closureFormat (CCDetails clabel _) = T.unpack clabel
 ccsFormat :: GenCCSPayload ccsPtr CCPayload -> [Char]
 ccsFormat Debug.CCSPayload{ccsCc = cc} = ccFormat cc
 ccFormat :: CCPayload -> [Char]
@@ -924,9 +919,9 @@ buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
                 rootAttr = if path == [0] then [Data.GraphViz.style filled, if expanded then fillColor Yellow else fillColor GreenYellow, color Red] else []
                 expAttr = if path /= [0] && not expanded then [Data.GraphViz.style filled, fillColor Green] else [] 
                 attrs = urlAttr ++ rootAttr ++ expAttr
-                label = Label . StrLabel $ TL.pack ("{ " ++ sanitise fNode
-                        ++ (if null cs then "" else " | { " ++  ((List.intercalate "|" (map (\(x, eid) -> "<" ++ sanitise x ++ "--" ++ show eid ++ ">") (zip cs [0..]))) ++ "}")) ++ "}")
-            in node n $ [ label , Shape Record ] ++ attrs
+                label' = Label . StrLabel $ TL.pack ("{ " ++ sanitise fNode
+                         ++ (if null cs then "" else " | { " ++  ((List.intercalate "|" (map (\(x, eid) -> "<" ++ sanitise x ++ "--" ++ show eid ++ ">") (zip cs ([0..] :: [Int])))) ++ "}")) ++ "}")
+            in node n $ [ label' , Shape Record ] ++ attrs
         ) nodes
   mapM_ (\(a, b, eid) -> edge a b [TailPort $ LabelledPort (PN $ TL.pack (sanitise b ++ "--" ++ show eid)) Nothing]) edges
   where sanitise = map replace
@@ -1332,6 +1327,7 @@ handlePartial appStateRef tree selectedPath getCDIO' renderSummary = do
   let capWarning = if imgCap cdio then "Note: this is a very large object, and this graph is incomplete" else "" :: String
   Scotty.json $ object ["summary" .= summaryHtml, "imgName" .= imgTitle, "capWarning" .= capWarning]
 
+renderGraph :: IORef AppState -> OperationalState -> ActionT IO ()
 renderGraph appStateRef os = do 
   -- retrieve currently running task (if any) and set it to Nothing
   mOldTask <- liftIO $ atomicModifyIORef' appStateRef $ \st ->
