@@ -25,9 +25,9 @@ import qualified Data.Text as T
 
 -- A tree style list where items can be expanded and collapsed
 data IOTree node name = IOTree
-    { _name :: name
+    { _name :: name  -- FIX: Pretty sure this isn't used anywhere
     , _roots :: [IOTreeNode node name]
-    , _selection :: [Int]
+    , _selection :: [Int] -- FIX: Pretty sure this isn't used anywhere
     -- ^ Indices along the path to the current selection. Empty list means no
     -- selection.
     }
@@ -70,8 +70,7 @@ ioTree name rootNodes getChildrenIO
 nodeToTreeNode :: (node -> IO [node]) -> node -> IOTreeNode node name
 nodeToTreeNode k n = IOTreeNode n (Left (fmap (nodeToTreeNode k) <$> k n))
 
-
-{- New code / web stuff -}
+{- Reads children regardless of expansion status -}
 getChildrenE :: Either (IO [IOTreeNode node name]) [IOTreeNode node name] -> IO [IOTreeNode node name]
 getChildrenE csE = case csE of
                      Left getChildren' -> getChildren'
@@ -123,7 +122,7 @@ getSubTree (IOTree _ roots _) path = findNodeByPath roots path
           Right cs -> findNodeByPath cs is
         findNodeByPath (_ : rest) (i : is) = findNodeByPath rest (i-1 : is)
 
-
+{- Expands/collapses a specific child -}
 toggleTreeByPath :: IOTree node name -> [Int] -> IO (IOTree node name)
 toggleTreeByPath (IOTree a roots b) path = do
   newRoots <- toggleNodeByPath roots path
@@ -146,6 +145,8 @@ toggleNodeByPath (n : rest) (i : is) = do
   rest' <- toggleNodeByPath rest (i-1 : is)
   return $ n : rest'
  
+{- Returns temporary tree with children expanded, until 'cap' unique nodes have been visited, augmented with paths and whether a node has been expanded.
+ - 'forced contains paths where the cap to be bypassed if specifically requested by user -}
 expandNodeSafe :: IOTreeNode node name -> (node -> String) -> [[Int]] -> IO (IOTreeNode (node, [Int], Bool) name, Bool)
 expandNodeSafe = expandNodeWithCap 100 []
 

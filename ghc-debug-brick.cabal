@@ -18,6 +18,11 @@ executable ghc-debug-brick
                      , IOTree
                      , Common
                      , Lib
+                     , Render
+                     , JS
+                     , Filter
+                     , Param
+                     , Graph
   build-depends:       base >=4.16 && <5
                      , bytestring
                      , containers

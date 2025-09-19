@@ -13,6 +13,7 @@ module Model
   ( module Model
   , module Namespace
   , module Common
+  , module Filter
   ) where
 
 import Network.Socket as NS
@@ -34,6 +35,7 @@ import Text.Read
 import Namespace
 import Common
 import Lib
+import Filter
 import IOTree
 import Data.Int
 import GHC.Debug.Client (ccID)
@@ -55,13 +57,6 @@ initialAppState = AppState
 data AppState = AppState
   { _majorState :: MajorState
   , currentTask :: Maybe (Async ())
-  }
-
-data Suggestions = Suggestions 
-  { _cons :: [String]
-  , _cloNames :: [String]
-  , _cloTypes :: [String]
-  , _ccIds :: [String]
   }
 
 mkSocketInfo :: FilePath -> IO SocketInfo
@@ -148,6 +143,15 @@ data CDIO = CDIO
   , _imgInfo :: Maybe ImgInfo
   , _hasGV :: Bool
   }
+
+imgName :: CDIO -> String
+imgName (CDIO _ (Just ImgInfo{..}) _) = _name
+imgName _ = ""
+imgCap :: CDIO -> Bool
+imgCap (CDIO _ (Just ImgInfo{..}) _) = _capped
+imgCap _ = False
+
+
 
 data Utils a = Utils {
   _renderRow :: a -> Html (),
