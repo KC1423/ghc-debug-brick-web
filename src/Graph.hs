@@ -6,7 +6,7 @@ module Graph where
 import qualified Data.Text.Lazy as TL
 import qualified Data.Set as Set
 import Data.GraphViz (GraphvizCommand(..), style, filled, color, X11Color(Yellow, Red, Green, GreenYellow), fillColor) 
-import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL, Shape, Label, TailPort), Overlap(PrismOverlap), Shape(Record), Label(StrLabel), PortName(..), PortPos(..))
+import Data.GraphViz.Attributes.Complete (Attribute(Overlap, URL, Shape, Label, TailPort), Overlap(PrismOverlap), Shape(Record), Label(StrLabel), PortName(..), PortPos(..), customAttribute)
 import Data.GraphViz.Types
 import Data.GraphViz.Types.Monadic (node, edge, digraph)
 import Data.GraphViz.Types.Generalised (DotGraph, graphStatements, DotStatement(GA))
@@ -47,7 +47,7 @@ buildClosureGraph nodes fnodes edges = digraph (Str "Visualisation") $ do
                 urlAttr = if not expanded' then [URL (TL.pack $ "http://localhost:3000/forceExpand?path=" ++ T.unpack (encodePath path'))] else []
                 rootAttr = if path' == [0] then [Data.GraphViz.style filled, if expanded' then fillColor Yellow else fillColor GreenYellow, color Red] else []
                 expAttr = if path' /= [0] && not expanded' then [Data.GraphViz.style filled, fillColor Green] else [] 
-                attrs' = urlAttr ++ rootAttr ++ expAttr
+                attrs' = (customAttribute "id" (TL.pack $ '_' : n)) : urlAttr ++ rootAttr ++ expAttr
                 label' = Label . StrLabel $ TL.pack ("{ " ++ sanitise fNode
                          ++ (if null cs then "" else " | { " ++  ((List.intercalate "|" (map (\(x, eid) -> "<" ++ sanitise x ++ "--" ++ show eid ++ ">") (zip cs ([0..] :: [Int])))) ++ "}")) ++ "}")
             in node n $ [ label' , Shape Record ] ++ attrs'
