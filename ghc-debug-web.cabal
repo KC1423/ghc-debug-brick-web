@@ -2,15 +2,16 @@ cabal-version:       2.4
 name:                ghc-debug-web
 version:             0.1.0.0
 synopsis:            A simple web GUI using ghc-debug
-description:         A simple web GUI using ghc-debug
+description:         A simple web GUI using ghc-debug, runs on localhost:3000
 bug-reports:         https://github.com/KC1423/ghc-debug-web/issues
 license:             BSD-3-Clause
 license-file:        LICENSE
+category:            Development
 author:              Keith Cory
 maintainer:          kc1423@ic.ac.uk
 build-type:          Simple
-extra-source-files:  CHANGELOG.md
-                   , src/js/*.js
+extra-doc-files:     CHANGELOG.md
+extra-source-files:  src/js/*.js
                    , src/DejaVuSans.ttf
 
 executable ghc-debug-web
@@ -65,3 +66,7 @@ executable ghc-debug-web
   hs-source-dirs:    src
   default-language:    Haskell2010
   ghc-options: -threaded -Wall "-with-rtsopts=-N -qn1"
+
+source-repository head
+  type:     git
+  location: git://github.com/KC1423/ghc-debug-web.git
