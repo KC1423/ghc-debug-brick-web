@@ -1,5 +1,6 @@
 let svgLoaded = false;
 let panzoomInstance = null;
+let lastClickedNodeId = null;
 
 function fastModeToggle() {
   const graphDiv = document.getElementById('toggleDiv');
@@ -202,6 +203,18 @@ function forceExpandPath(path) {
         panzoomInstance.moveTo(transform.x, transform.y);
 	panzoomInstance.zoomAbs(transform.x, transform.y, transform.scale);
 
+	/* If the graph moves a lot it would be nice to re-centre around the last clicked node
+	 *
+	if (lastClickedNodeId) {
+	  const newNode = svg.querySelector(`#${CSS.escape(lastClickedNodeId)}`);
+          if (newNode) {
+            const newPos = ???;
+            const dx = transform.x - newPos.x;
+	    const dy = transform.y - newPos.y;
+	    panzoomInstance.moveBy(dx, dy);
+	  }		
+	}*/
+
 	const downloadLink = document.getElementById('download-link');
         downloadLink.style.display = 'inline-block';
 
@@ -234,6 +247,13 @@ document.addEventListener('DOMContentLoaded', function () {
         history.pushState(null, '', `?selected=${encodeURIComponent(selected)}`);
         updateSelection(selected);
         return;
+      }
+    }
+    const node = target.closest('.node');
+    if (node) {
+      const svg = document.querySelector('#svg-container svg');
+      if (svg) {
+        lastClickedNodeId = node.id;
       }
     }
     if (url.pathname === '/forceExpand') {
