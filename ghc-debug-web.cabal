@@ -28,41 +28,39 @@ executable ghc-debug-web
                      , Graph
   build-depends:       base >=4.16 && <5
                      , bytestring
-                     , containers
-                     , directory
-                     , filepath
-                     , microlens-platform
-                     , text
-                     , vty-crossplatform
-                     , vty >= 6
-                     , time
-                     , deepseq
-                     , microlens
+                     , containers <1
+                     , directory <2
+                     , filepath <2
+                     , microlens-platform <1
+                     , text <3
+                     , time <2
+                     , deepseq <2
+                     , microlens <1
                      , ghc-debug-client == 0.7.0.0
                      , ghc-debug-common == 0.7.0.0
                      , ghc-debug-convention == 0.7.0.0
-                     , unordered-containers
-                     , exceptions
-                     , contra-tracer
-                     , bytestring
-                     , byteunits
-                     , scotty
-                     , lucid
-                     , network
-                     , split
-                     , graphviz
-                     , JuicyPixels
-                     , Rasterific
-                     , colour
-                     , FontyFruity
-                     , eventlog2html
-                     , ghc-events
-                     , wai-extra
-                     , process
-                     , aeson
-                     , wai-middleware-static
-                     , http-types
-                     , async
+                     , unordered-containers <1
+                     , exceptions <1
+                     , contra-tracer <1
+                     , bytestring <1
+                     , byteunits <1
+                     , scotty >=0.22 && <1
+                     , lucid >=2.11 && <3
+                     , network >=3.2 && <4
+                     , split >=0.2 && <1
+                     , graphviz >=2999.20 && <3000
+                     , JuicyPixels >=3.3 && <4
+                     , Rasterific >=0.7 && <1
+                     , colour >=2.3 && <3
+                     , FontyFruity >=0.5 && <1
+                     , eventlog2html >=0.12 && <1
+                     , ghc-events >=0.20 && <1
+                     , wai-extra >=3.1 && <4
+                     , process >=1.6 && <2
+                     , aeson >=2.2 && <3
+                     , wai-middleware-static >=0.9 && <1
+                     , http-types >=0.12 && <1
+                     , async >=2.2 && <3
   hs-source-dirs:    src
   default-language:    Haskell2010
   ghc-options: -threaded -Wall "-with-rtsopts=-N -qn1"
