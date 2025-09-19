@@ -17,6 +17,9 @@ data ProfileLevel = OneLevel | TwoLevel deriving Show
 svgPath :: String
 svgPath = "tmp/graph.svg"
 
+fontPath :: String
+fontPath = "src/DejaVuSans.ttf"
+
 {- Utils -}
 truncN :: Int -> String -> String
 truncN n s = take n s ++ (if length s > n then "..." else "")

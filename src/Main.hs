@@ -727,7 +727,7 @@ app appStateRef = do
               mapM (\(lbl, child) -> FieldLine <$> getClosureDetails d (pack lbl) child) children'
             g_children d (FieldLine c) = map FieldLine <$> getChildren d c
 
-        eFont <- liftIO $ loadFontFile "DejaVuSans.ttf"
+        eFont <- liftIO $ loadFontFile fontPath --"src/DejaVuSans.ttf"
         case eFont of 
           Right font -> liftIO $ do 
             createDirectoryIfMissing True "tmp"

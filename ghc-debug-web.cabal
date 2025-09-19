@@ -11,6 +11,7 @@ maintainer:          kc1423@ic.ac.uk
 build-type:          Simple
 extra-source-files:  CHANGELOG.md
                    , src/js/*.js
+                   , src/DejaVuSans.ttf
 
 executable ghc-debug-web
   main-is:             Main.hs
